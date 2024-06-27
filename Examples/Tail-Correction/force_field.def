@@ -5,4 +5,6 @@ Ar Ar truncated yes
 # number of defined interactions
 0
 # mixing rules to overwrite
-0
+1
+#
+Ar Ar lennard-jones 0.0     3.407

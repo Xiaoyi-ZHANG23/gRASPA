@@ -148,7 +148,7 @@ void Check_Inputs_In_read_data_cpp(std::string& exepath)
   printf("True path of exe is %s\n", exepath.c_str());
   std::string str;
   std::ifstream file("simulation.input");
-  size_t tempnum = 0; bool tempsingle = false; size_t counter = 0;
+  size_t counter = 0;
   while (std::getline(file, str))
   {
     Split_Tab_Space(termsScannedLined, str);
@@ -586,7 +586,7 @@ void ReadFrameworkComponentMoves(Move_Statistics& MoveStats, Components& SystemC
     }
     if (str.find("END_OF_Framework_Component_" + std::to_string(comp), 0) != std::string::npos)
     {
-      printf("Reach the end of %s\n", FrameworkComponentName); break;
+      printf("Reach the end of %s\n", FrameworkComponentName.c_str()); break;
     } 
     counter ++;
   }
@@ -747,7 +747,6 @@ double Mixing_rule_Sigma(double sig1, double sig2)
 //The type numbering is determined in here, then used in pseudo_atoms.def
 void ForceFieldParser(ForceField& FF, PseudoAtomDefinitions& PseudoAtom)
 {
-  double CutOffSquared = 144.0; 
   std::string scannedLine; std::string str;
   std::vector<std::string> termsScannedLined{};
   size_t counter = 0;
@@ -811,8 +810,14 @@ void ForceFieldParser(ForceField& FF, PseudoAtomDefinitions& PseudoAtom)
       temp_sig= Mixing_rule_Sigma(Sigma[i], Sigma[j]);
       Mix_Epsilon.push_back(temp_ep);
       Mix_Sigma.push_back(temp_sig);
-      if(shifted){
-        Mix_Shift.push_back(Get_Shifted_Value(temp_ep, temp_sig, CutOffSquared));}else{Mix_Shift.push_back(0.0);}
+      if(shifted)
+      {
+        Mix_Shift.push_back(Get_Shifted_Value(temp_ep, temp_sig, FF.CutOffVDW));
+      }
+      else
+      {
+        Mix_Shift.push_back(0.0);
+      }
       if(tail){
       throw std::runtime_error("Tail correction not implemented YET in force_field_mixing_rules.def, use the overwritting file force_field.def instead...");} 
       Mix_Z.push_back(0.0);
@@ -820,13 +825,14 @@ void ForceFieldParser(ForceField& FF, PseudoAtomDefinitions& PseudoAtom)
     }
   }
   //For checking if mixing rule terms are correct//
-  /*
+  printf("----- MIXED VDW PARAMETERS -----\n");
   for(size_t i = 0; i < Mix_Shift.size(); i++)
   {
-    size_t ii = i/NumberOfDefinitions; size_t jj = i%NumberOfDefinitions; printf("i: %zu, ii: %zu, jj: %zu", i,ii,jj);
-    printf("i: %zu, ii: %zu, jj: %zu, Name_i: %s, Name_j: %s, ep: %.10f, sig: %.10f, shift: %.10f\n", i,ii,jj,PseudoAtom.Name[ii].c_str(), PseudoAtom.Name[jj].c_str(), Mix_Epsilon[i], Mix_Sigma[i], Mix_Shift[i]);
+    size_t ii = i/NumberOfDefinitions; size_t jj = i%NumberOfDefinitions;
+    if(ii <= jj) printf("i: %zu, ii: %zu, jj: %zu, Name_i: %s, Name_j: %s, ep: %.10f, sig: %.10f, shift: %.10f\n", i,ii,jj,PseudoAtom.Name[ii].c_str(), PseudoAtom.Name[jj].c_str(), Mix_Epsilon[i], Mix_Sigma[i], Mix_Shift[i]);
   }
-  */
+  printf("----- END OF MIXED VDW PARAMETERS -----\n");
+  
   FF.epsilon = convert1DVectortoArray(Mix_Epsilon);
   FF.sigma   = convert1DVectortoArray(Mix_Sigma);
   FF.z       = convert1DVectortoArray(Mix_Z);
@@ -877,9 +883,108 @@ static inline void PrepareTailCorrection(size_t i, size_t j, std::vector<Tail>& 
 }
 //Function for Overwritten tail corrections
 //For now, it only considers tail correction//
-void OverWriteFFTerms(Components& SystemComponents, ForceField& FF, PseudoAtomDefinitions& PseudoAtom)
+//Add overwritting LJ//
+void OverWrite_Mixing_Rule(ForceField& FF, PseudoAtomDefinitions& PseudoAtom)
 {
-  size_t FFsize = FF.size;
+  std::string scannedLine; std::string str;
+  std::vector<std::string> termsScannedLined{};
+  std::ifstream FFMixfile("force_field_mixing_rules.def");
+  bool shifted = false;
+  size_t counter = 0;
+  //check if vdw is shifted
+  while (std::getline(FFMixfile, str))
+  {
+    if(counter == 1) //read shifted/truncated
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "shifted")
+        shifted = true;
+      break;
+    }
+    counter ++;
+  }
+  FFMixfile.close();
+
+  //Check if file exist//
+  std::ifstream OverWritefile("force_field.def");
+  std::filesystem::path pathfile = std::filesystem::path("force_field.def");
+  if (!std::filesystem::exists(pathfile))
+  {
+    printf("Force Field OverWrite file not found\n");
+    return;
+  }
+  
+  size_t startline = 0; size_t Noverwrite = 0;
+  counter = 0;
+  //check # of mixing rules to overwrite
+  while (std::getline(OverWritefile, str))
+  {
+    if (str.find("mixing rules to overwrite", 0) != std::string::npos) //read OverWriteSize
+    {
+      startline = counter;
+    }
+    if(startline > 0 && (counter == startline + 1)) //Read next line
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      sscanf(termsScannedLined[0].c_str(), "%zu", &Noverwrite);
+      break;
+    }
+    counter ++;
+  }
+  printf("----- OVERWRITTING VDW PARAMETERS -----\n");
+  printf("There are %zu overwritting entries, starting from line %zu\n", Noverwrite, startline);
+  if(Noverwrite == 0) 
+  {
+    return;
+  }
+  OverWritefile.clear();
+  OverWritefile.seekg(0);
+
+  counter = 0;
+  while (std::getline(OverWritefile, str))
+  {
+    printf("counter: %zu, %s, shifted: %s\n", counter, (counter >= (startline+3) && counter < (3 + startline + Noverwrite)) ? "true" : "false", shifted ? "true" : "false");
+    if(counter >= (startline+3) && counter < (3 + startline + Noverwrite))
+    {
+      printf("cutting string: %s\n", str.c_str());
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined.size() == 5) //5 entries = LJ mixing rule parameter length
+      {
+        //Ow Hw lennard-jones 1.0 1.0
+        printf("Overwritting parameters for VDW (lennard-jones): %s and %s\n", termsScannedLined[0].c_str(), termsScannedLined[1].c_str());
+        size_t typeI = GetTypeForPseudoAtom(PseudoAtom, termsScannedLined[0]);
+        size_t typeJ = GetTypeForPseudoAtom(PseudoAtom, termsScannedLined[1]);
+
+        double temp_ep = std::stod(termsScannedLined[3])/1.20272430057; //K -> 10J/mol
+        double temp_sig= std::stod(termsScannedLined[4]);               //Angstroem
+        FF.epsilon[typeI * FF.size + typeJ] = temp_ep;
+        FF.epsilon[typeJ * FF.size + typeI] = temp_ep;
+        FF.sigma[typeI * FF.size + typeJ] = temp_sig;
+        FF.sigma[typeJ * FF.size + typeI] = temp_sig;
+        if(shifted)
+        {
+          FF.shift[typeI * FF.size + typeJ] = Get_Shifted_Value(temp_ep, temp_sig, FF.CutOffVDW);
+          FF.shift[typeJ * FF.size + typeI] = Get_Shifted_Value(temp_ep, temp_sig, FF.CutOffVDW);
+        }
+      }
+    }
+    counter ++;
+  }
+  printf("----- MIXED VDW PARAMETERS (WITH OVERWRITTEN TERMS) -----\n");
+  for(size_t ii = 0; ii < FF.size; ii++)
+    for(size_t jj = 0; jj < FF.size; jj++)
+    {
+      if(ii <= jj) printf("ii: %zu, jj: %zu, Name_i: %s, Name_j: %s, ep: %.10f, sig: %.10f, shift: %.10f\n", ii,jj,PseudoAtom.Name[ii].c_str(), PseudoAtom.Name[jj].c_str(), FF.epsilon[ii * FF.size + jj], FF.sigma[ii * FF.size + jj], FF.shift[ii * FF.size + jj]);
+    }
+  printf("----- END OF MIXED VDW PARAMETERS (WITH OVERWRITTEN TERMS) -----\n");
+  OverWritefile.clear();
+  OverWritefile.seekg(0);
+  OverWritefile.close();
+}
+
+void OverWriteTailCorrection(Components& SystemComponents, ForceField& FF, PseudoAtomDefinitions& PseudoAtom)
+{
+  size_t FFsize = FF.size; 
   std::string scannedLine; std::string str;
   std::vector<std::string> termsScannedLined{};
   size_t counter = 0;
@@ -896,12 +1001,12 @@ void OverWriteFFTerms(Components& SystemComponents, ForceField& FF, PseudoAtomDe
     return;
   }
   else
-  {
+  { 
     SystemComponents.HasTailCorrection = true;
   } 
   printf("----------------FORCE FIELD OVERWRITTEN (TAIL CORRECTION) PARAMETERS----------------\n");
   while (std::getline(OverWritefile, str))
-  {
+  { 
     if(counter == 1) //read OverWriteSize
     {
       Split_Tab_Space(termsScannedLined, str);
@@ -909,7 +1014,9 @@ void OverWriteFFTerms(Components& SystemComponents, ForceField& FF, PseudoAtomDe
     }
     else if(counter >= 3 && counter < (3 + OverWriteSize)) //read Terms to OverWrite
     {
+      if(str.find("#", 0) != std::string::npos) throw std::runtime_error("Found # in when processing tail correction overwrite terms. Check your number of rules to overwrite!");
       Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined.size() != 4) throw std::runtime_error("Tail Correction Overwrite need 4 terms for each entry! Check your force_field.def file!");
       if(termsScannedLined[3] == "yes") //Use Tail Correction or not//
       {
         typeI = GetTypeForPseudoAtom(PseudoAtom, termsScannedLined[0]);
@@ -917,8 +1024,7 @@ void OverWriteFFTerms(Components& SystemComponents, ForceField& FF, PseudoAtomDe
         PrepareTailCorrection(typeI, typeJ, TempTail, PseudoAtom, FF);
       }
     }
-    counter ++;
-    if(counter==3 + OverWriteSize) break; //in case there are extra empty rows, Zhao's note: I am skipping the mixing rule, assuming Lorentz-Berthelot
+    counter ++;    if(counter==3 + OverWriteSize) break; //in case there are extra empty rows, Zhao's note: I am skipping the mixing rule, assuming Lorentz-Berthelot
   }
   printf("------------------------------------------------------------------------------------\n");
   //Eliminate the terms that do not have tail corrections//
@@ -1788,6 +1894,7 @@ double process_str_double_DBLMIN(const std::string& str)
         return 0.0;
       else return std::stod(str);
   }
+  return 0.0;
 }
 
 static inline void Read_TMMC_Initial(TMMC& tmmc, std::string& MolName)
@@ -1922,7 +2029,7 @@ void read_component_values_from_simulation_input(Components& SystemComponents, M
         Split_Tab_Space(termsScannedLined, str);
         MolName = termsScannedLined[3];
         SystemComponents.MoleculeName.push_back(MolName);
-        std::cout << "-------------- READING " << start_string << " (" << MolName << ")" << " --------------\n";
+        std::cout << "-------------- READING Adsorbate" << start_string << " (" << MolName << ")" << " --------------\n";
         MoleculeDefinitionParser(Mol, SystemComponents, termsScannedLined[3], PseudoAtom, Allocate_space);
       }
       if (str.find("IdealGasRosenbluthWeight", 0) != std::string::npos)
@@ -2324,7 +2431,6 @@ void LMPDataFileParser(Boxsize& Box, Components& SystemComponents)
 {
   printf("/*----------- READING INITIAL LAMMPS DATA FILE AS INPUT!!! -----------*/\n");
   printf("/*WARNING: Please make sure that your ATOM TYPES ARE CONSISTENT in Lammps data file and pseudo_atoms.def!!!*/\n");
-  bool ReadBoxsize = false;
   //Read the starting component to read from the LMPData file, if zero, then the framework 0 component is read, if one, then you start with one and skip zero//
   size_t StartComponent = ReadLMPDataStartComponent(SystemComponents);
 
@@ -2512,7 +2618,6 @@ void LMPDataFileParser(Boxsize& Box, Components& SystemComponents)
 
 void RestartFileParser(Boxsize& Box, Components& SystemComponents)
 {
-  bool UseChargesFromCIFFile = true;  //Zhao's note: if not, use charge from pseudo atoms file, not implemented (if reading poscar, then self-defined charges probably need a separate file //
   std::string scannedLine; std::string str;
   std::vector<std::string> termsScannedLined{};
   //Determine framework name (file name)//

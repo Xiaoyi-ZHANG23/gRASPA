@@ -630,7 +630,7 @@ __global__ void Calculate_Single_Body_Energy_SEPARATE_HostGuest_VDWReal(Boxsize 
   BlockEnergy[blockIdx.x] = 0.0; 
   BlockEnergy[blockIdx.x + Total_Nblock] = 0.0;
 
-  __shared__ bool Blockflag = false;
+  //__shared__ bool Blockflag = false;
 
   const size_t NTotalComp = NComps.x;
   const size_t NHostComp  = NComps.y;
@@ -746,8 +746,8 @@ __global__ void Calculate_Single_Body_Energy_SEPARATE_HostGuest_VDWReal(Boxsize 
       const size_t row = typeA*FF.size+typeB;
       const double FFarg[4] = {FF.epsilon[row], FF.sigma[row], FF.z[row], FF.shift[row]};
       VDW(FFarg, rr_dot, scaling, result);
-      if(result[0] > FF.OverlapCriteria) { Blockflag = true; flag[0] = true; }
-      if(rr_dot < 0.01)                  { Blockflag = true; flag[0] = true; } //DistanceCheck//
+      if(result[0] > FF.OverlapCriteria) { /*Blockflag = true;*/ flag[0] = true; }
+      if(rr_dot < 0.01)                  { /*Blockflag = true;*/ flag[0] = true; } //DistanceCheck//
       tempy.x  += result[0];
       tempdU   += result[1];
     }
@@ -847,7 +847,7 @@ __global__ void Calculate_Single_Body_Energy_SEPARATE_HostGuest_VDWReal_LambdaCh
   BlockEnergy[blockIdx.x] = 0.0; 
   BlockEnergy[blockIdx.x + Total_Nblock] = 0.0;
 
-  __shared__ bool Blockflag = false;
+  //__shared__ bool Blockflag = false;
 
   const size_t NTotalComp = NComps.x;
   const size_t NHostComp  = NComps.y;
@@ -971,8 +971,8 @@ __global__ void Calculate_Single_Body_Energy_SEPARATE_HostGuest_VDWReal_LambdaCh
       VDW(FFarg, rr_dot, Newscaling, result);
       tempy.x  += result[0];
       tempdU   += result[1];
-      if(result[0] > FF.OverlapCriteria) { Blockflag = true; flag[0] = true; }
-      if(rr_dot < 0.01)                  { Blockflag = true; flag[0] = true; } //DistanceCheck//
+      if(result[0] > FF.OverlapCriteria) { /*Blockflag = true;*/ flag[0] = true; }
+      if(rr_dot < 0.01)                  { /*Blockflag = true;*/ flag[0] = true; } //DistanceCheck//
     }
     if (!FF.noCharges && rr_dot < FF.CutOffCoul)
     {
@@ -1184,7 +1184,7 @@ __global__ void Calculate_Multiple_Trial_Energy_SEPARATE_HostGuest_VDWReal(Boxsi
   size_t StoreId = blockIdx.x + trial * NblockForTrial;
   if(cache_id == 0) { Blocksum[StoreId] = 0.0; Blocksum[StoreId + NblockForTrial] = 0.0; }
 
-  __shared__ bool Blockflag = false;
+  //__shared__ bool Blockflag = false;
 
   if(trial_blockID >= HG_Nblock)
     ij -= HG_Nblock * blockDim.x; //It belongs to the Guest-Guest Interaction//
@@ -1256,7 +1256,7 @@ __global__ void Calculate_Multiple_Trial_Energy_SEPARATE_HostGuest_VDWReal(Boxsi
     //printf("i: %lu, posi: %lu, size1: %lu, size2: %lu\n", i, posi, System[0].size, System[1].size);
 
     double2 tempy = {0.0, 0.0};
-    double ConsiderThisMolecule = true;
+    bool ConsiderThisMolecule = true;
     //Checking the first element of the ExcludeList to Ignore specific component/molecule//
     if(comp == ExcludeList[0].x && MoleculeID == ExcludeList[0].y) ConsiderThisMolecule = false;
     if((MoleculeID == NewMol.MolID[0]) &&(comp == ComponentID))    ConsiderThisMolecule = false;
@@ -1276,8 +1276,8 @@ __global__ void Calculate_Multiple_Trial_Energy_SEPARATE_HostGuest_VDWReal(Boxsi
         //printf("typeA: %lu, typeB: %lu, FF.size: %lu, row: %lu\n", typeA, typeB, FF.size, row);
         const double FFarg[4] = {FF.epsilon[row], FF.sigma[row], FF.z[row], FF.shift[row]};
         VDW(FFarg, rr_dot, scaling, result); 
-        if(result[0] > FF.OverlapCriteria){ flag[trial]=true; Blockflag = true; }
-        if(rr_dot < 0.01) {flag[trial]=true; Blockflag = true; } //DistanceCheck//
+        if(result[0] > FF.OverlapCriteria){ flag[trial]=true; }
+        if(rr_dot < 0.01) {flag[trial]=true; } //DistanceCheck//
         tempy.x += result[0];
         //DEBUG//
         /*
@@ -1306,18 +1306,18 @@ __global__ void Calculate_Multiple_Trial_Energy_SEPARATE_HostGuest_VDWReal(Boxsi
   }
   __syncthreads();
   //Partial block sum//
-  if(!Blockflag)
-  {
-    int i=blockDim.x / 2;
-    while(i != 0) 
+  //if(!Blockflag)
+  //{
+    int reductionsize=blockDim.x / 2;
+    while(reductionsize != 0) 
     {
-      if(cache_id < i) 
+      if(cache_id < reductionsize) 
       {
-        sdata[cache_id] += sdata[cache_id + i];
-        sdata[cache_id + blockDim.x] += sdata[cache_id + i + blockDim.x];
+        sdata[cache_id] += sdata[cache_id + reductionsize];
+        sdata[cache_id + blockDim.x] += sdata[cache_id + reductionsize + blockDim.x];
       }
       __syncthreads();
-      i /= 2;
+      reductionsize /= 2;
     }
     if(cache_id == 0) 
     {
@@ -1326,7 +1326,7 @@ __global__ void Calculate_Multiple_Trial_Energy_SEPARATE_HostGuest_VDWReal(Boxsi
      //if(trial_blockID >= HG_Nblock) 
     //printf("GG, trial: %lu, BlockID: %lu, data: %.5f\n", trial, blockIdx.x, sdata[0]);
     }
-  }
+  //}
 }
 
 __device__ void VDWCoulEnergy_Total(Boxsize Box, Atoms ComponentA, Atoms ComponentB, size_t Aij, size_t Bij, ForceField FF, bool* flag, bool& Blockflag, double& tempy, size_t NA, size_t NB, bool UseOffset)
