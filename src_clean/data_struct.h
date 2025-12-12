@@ -1345,6 +1345,7 @@ struct Atom_FF //Atom definitions, epsilon, sigma, charge//
   std::string Name;
   double epsilon;
   double sigma;
+  double C4 = 0.0;
   bool   shift = false;
   bool   tail  = false;
 };

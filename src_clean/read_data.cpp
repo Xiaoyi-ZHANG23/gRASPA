@@ -793,6 +793,7 @@ void ForceFieldParser(Input_Container& Input, PseudoAtomDefinitions& PseudoAtom)
       AtomFF.Name    = termsScannedLined[0];
       AtomFF.epsilon = std::stod(termsScannedLined[2]);
       AtomFF.sigma   = std::stod(termsScannedLined[3]);
+      if(termsScannedLined.size() > 4) AtomFF.C4 = std::stod(termsScannedLined[4]);
       AtomFF.shift   = shifted;
       AtomFF.tail    = tail;
       
