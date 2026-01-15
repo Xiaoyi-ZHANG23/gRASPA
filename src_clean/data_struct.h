@@ -1,5 +1,6 @@
 #include <filesystem>
 
+#include <cuda_runtime.h>
 #include <stdio.h>
 #include <vector>
 #include <string>
@@ -794,6 +795,15 @@ struct Atoms
   size_t   Molsize;
   size_t   size;
   size_t   Allocate_size;
+  void Free()
+  {
+    if(pos) free(pos);
+    if(scale) free(scale);
+    if(charge) free(charge);
+    if(scaleCoul) free(scaleCoul);
+    if(Type) free(Type);
+    if(MolID) free(MolID);
+  }
 };
 
 struct FRAMEWORK_COMPONENT_LISTS
@@ -879,6 +889,11 @@ struct Boxsize
   bool     Cubic;
   bool     UseLAMMPSEwald = false;
   int3     kmax;
+  void FreeHost()
+  {
+    if(Cell) free(Cell);
+    if(InverseCell) free(InverseCell);
+  }
 };
 //###PATCH_ALLEGRO_H###//
 
@@ -1244,6 +1259,22 @@ struct Components
   }
 
   FILE* OUTPUT = stderr;
+
+  void Free()
+  {
+    if(HostSystem)
+    {
+      for(size_t i = 0; i < NComponents.x; i++) HostSystem[i].Free();
+      free(HostSystem);
+    }
+    TempSystem.Free();
+    if(tempMolStorage) cudaFree(tempMolStorage);
+    if(flag) free(flag);
+    if(host_array) free(host_array);
+    if(device_InverseIndexList) cudaFree(device_InverseIndexList);
+    if(ConsiderThisAdsorbateAtom) cudaFree(ConsiderThisAdsorbateAtom);
+    if(device_Distances) cudaFree(device_Distances);
+  }
 };
 
 
@@ -1260,6 +1291,22 @@ struct Simulations //For multiple simulations//
   size_t  start_position;       // Start position for reading data in d_a when proposing a trial position for moves //
   size_t  Nblocks;              // Number of blocks for energy calculation, NOT block averages! //
   Boxsize Box;                  // Each simulation (system) has its own box //
+  void FreeDevice()
+  {
+    if(d_a) cudaFree(d_a);
+    if(ExcludeList) cudaFree(ExcludeList);
+    if(Blocksum) cudaFreeHost(Blocksum);
+    if(device_flag) cudaFreeHost(device_flag);
+    if(Box.Cell) cudaFree(Box.Cell);
+    if(Box.InverseCell) cudaFree(Box.InverseCell);
+    if(Box.eik_x) cudaFree(Box.eik_x);
+    if(Box.eik_y) cudaFree(Box.eik_y);
+    if(Box.eik_z) cudaFree(Box.eik_z);
+    if(Box.AdsorbateEik) cudaFree(Box.AdsorbateEik);
+    if(Box.FrameworkEik) cudaFree(Box.FrameworkEik);
+    if(Box.tempEik) cudaFree(Box.tempEik);
+    if(Box.tempFrameworkEik) cudaFree(Box.tempFrameworkEik);
+  }
 };
 
 
@@ -1338,6 +1385,11 @@ struct RandomNumber
     AllocateRandom();
     DeviceRandom();
     Rounds = 0;
+  }
+  void Free()
+  {
+    if(host_random) free(host_random);
+    if(device_random) cudaFree(device_random);
   }
 };
 
@@ -1420,6 +1472,17 @@ struct Variables
   double systemId;
 
   //MC_MOVES MOVES;
+  void CleanUp()
+  {
+    for(size_t i = 0; i < SystemComponents.size(); i++) SystemComponents[i].Free();
+    if(Sims)
+    {
+      for(size_t i = 0; i < SystemComponents.size(); i++) Sims[i].FreeDevice();
+      cudaFree(Sims);
+    }
+    for(size_t i = 0; i < Box.size(); i++) Box[i].FreeHost();
+    Random.Free();
+  }
 };
 
 /*

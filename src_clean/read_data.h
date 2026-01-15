@@ -73,7 +73,7 @@ template<typename T>
 inline T* convert1DVectortoArray(std::vector<T>& Vector)
 {
   size_t Vectorsize = Vector.size();
-  T* result=new T[Vectorsize];
+  T* result = (T*) malloc(Vectorsize * sizeof(T));
   T* walkarr=result;
   std::copy(Vector.begin(), Vector.end(), walkarr);
   //printf("done convert Mol Type, Origin: %zu, copied: %zu\n", MoleculeTypeArray[0], result[0]);

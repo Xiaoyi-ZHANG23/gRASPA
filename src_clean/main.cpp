@@ -442,6 +442,7 @@ void EndOfSimulationWrapUp(Variables& Vars)
   GenerateSummaryAtEnd(0, Vars.SystemComponents, Vars.Sims, Vars.FF, Vars.Box);
   //Check CPU mem used//
   printMemoryUsage();
+  Vars.CleanUp();
   /*
   if(Vars.SystemComponents[a].UseDNNforHostGuest)
   { 
