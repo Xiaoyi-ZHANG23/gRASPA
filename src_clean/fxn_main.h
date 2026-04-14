@@ -140,10 +140,12 @@ void Copy_ForceField_to_GPU(Variables& Vars)
   Vars.device_FF.sigma           = CUDA_copy_allocate_array(Vars.FF.sigma,   FF_size*FF_size);
   Vars.device_FF.z               = CUDA_copy_allocate_array(Vars.FF.z,       FF_size*FF_size);
   Vars.device_FF.shift           = CUDA_copy_allocate_array(Vars.FF.shift,   FF_size*FF_size);
+  Vars.device_FF.C10             = CUDA_copy_allocate_array(Vars.FF.C10,     FF_size*FF_size);
   Vars.device_FF.FFType          = CUDA_copy_allocate_array(Vars.FF.FFType,  FF_size*FF_size);
   Vars.device_FF.noCharges       = Vars.FF.noCharges;
   Vars.device_FF.size            = FF_size;
   Vars.device_FF.VDWRealBias     = Vars.FF.VDWRealBias;
+  Vars.device_FF.Use1264         = Vars.FF.Use1264;
 }
 
 inline void InitializeMaxTranslationRotation(Components& SystemComponents)
