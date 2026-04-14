@@ -835,13 +835,15 @@ struct PseudoAtomDefinitions //Always a host struct, never on the device
 
 struct ForceField
 {
-  double* epsilon;
-  double* sigma;
-  double* z; // a third term
+  double* epsilon;  // Use1264=false: epsilon (internal). Use1264=true: C12 coefficient
+  double* sigma;    // Use1264=false: sigma (Angstrom).   Use1264=true: C6 coefficient
+  double* z;        // Use1264=false: 0 (unused).         Use1264=true: C4 (r^-4 term)
   double* shift;
-  int*    FFType; //type of force field calculation  
+  double* C10;      // C10 coefficient for r^-10 term (0 when Use1264=false, always allocated)
+  int*    FFType;   //type of force field calculation
   bool    noCharges;
   bool    VDWRealBias = true; //By default, the CBMC moves use VDW + Real Biasing//
+  bool    Use1264 = false;    // Keyword-controlled: use polynomial VDW for 12-6-4 LJ (Du et al.)
   size_t  size;
   double  OverlapCriteria;
   double  CutOffVDW;       // Square of cutoff for vdW interaction //
@@ -1346,6 +1348,7 @@ struct Atom_FF //Atom definitions, epsilon, sigma, charge//
   std::string Name;
   double epsilon;
   double sigma;
+  double C4 = 0.0;    // C_4 parameter for 12-6-4 LJ potential (K*A^4), 0.0 = standard 12-6
   bool   shift = false;
   bool   tail  = false;
 };
@@ -1358,10 +1361,12 @@ struct Input_Container
   std::vector<double>Mix_Shift;
   std::vector<Tail>Mix_Tail; //See Tail Struct: a bool and a double//
   std::vector<double>Mix_Z;
+  std::vector<double>Mix_C10; // C10 coefficient (0 when Use1264=false, always allocated)
   std::vector<int>Mix_Type; //Forcefield types, e.g. LJ//
   double CutOffVDW = 12.0 * 12.0;
   double CutOffCoul= 12.0 * 12.0;
   bool    VDWRealBias = true; //By default, the CBMC moves use VDW + Real Biasing//
+  bool    Use1264 = false;    // Keyword: use 12-6-4 LJ polynomial VDW (Du et al. JCTC 2020)
   double  OverlapCriteria;
 
   bool    noCharges;
