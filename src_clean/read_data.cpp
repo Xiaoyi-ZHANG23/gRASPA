@@ -561,7 +561,12 @@ void ReadFrameworkComponentMoves(Move_Statistics& MoveStats, Components& SystemC
       Split_Tab_Space(termsScannedLined, str);
       //printf("Found Framework_Component %s in simulation.input file\n", std::to_string(comp).c_str());
     }
-    if (str.find("TranslationProbability", 0) != std::string::npos)
+    if (str.find("RandomTranslationProbability", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      MoveStats.RandomTranslationProb=std::stod(termsScannedLined[1]);
+    }
+    else if (str.find("TranslationProbability", 0) != std::string::npos)
     {
       Split_Tab_Space(termsScannedLined, str);
       MoveStats.TranslationProb=std::stod(termsScannedLined[1]);
@@ -2162,7 +2167,12 @@ void read_component_values_from_simulation_input(Variables& Vars, Components& Sy
         Split_Tab_Space(termsScannedLined, str);
         idealrosen = std::stod(termsScannedLined[1]); //printf("Ideal Chain Rosenbluth Weight: %.5f\n", idealrosen);
       }
-      if (str.find("TranslationProbability", 0) != std::string::npos)
+      if (str.find("RandomTranslationProbability", 0) != std::string::npos)
+      {
+        // RandomTranslationProbability is only for framework components; warn and ignore if in adsorbate block
+        printf("WARNING: RandomTranslationProbability found in adsorbate component block, ignoring (use in Framework_Component_ block only)\n");
+      }
+      else if (str.find("TranslationProbability", 0) != std::string::npos)
       {
         Split_Tab_Space(termsScannedLined, str);
         MoveStats.TranslationProb=std::stod(termsScannedLined[1]);

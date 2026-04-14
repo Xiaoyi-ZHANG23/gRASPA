@@ -45,6 +45,12 @@ inline void SingleBody_Prepare(Variables& Vars, size_t systemId)
       MaxChange = SystemComponents.MaxTranslation[SelectedComponent];
       break;
     }
+    case RANDOM_TRANSLATION:
+    {
+      Do_New = true; Do_Old = true;
+      // MaxChange is unused; kernel uses full box dimensions directly
+      break;
+    }
     case ROTATION:
     {
       Do_New = true; Do_Old = true;
@@ -94,7 +100,7 @@ inline void SingleBody_Prepare(Variables& Vars, size_t systemId)
     
     // Set move type for blockpocket statistics
     int move_type = 7; // Default to Other
-    if(MoveType == TRANSLATION) move_type = 0;
+    if(MoveType == TRANSLATION || MoveType == RANDOM_TRANSLATION) move_type = 0;
     else if(MoveType == ROTATION || MoveType == SPECIAL_ROTATION) move_type = 1;
     SystemComponents.CurrentBlockedPocketMoveType = move_type;
     
@@ -265,7 +271,7 @@ inline void SingleBody_Acceptance(Variables& Vars, size_t systemId, MoveEnergy& 
   {
     switch(MoveType)
     {
-      case TRANSLATION: case ROTATION: case SPECIAL_ROTATION:
+      case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: case SPECIAL_ROTATION:
       {
         AcceptTranslation(Vars, systemId);
         break;

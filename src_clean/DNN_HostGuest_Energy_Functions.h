@@ -76,7 +76,7 @@ void Prepare_DNN_InitialPositions(Atoms*& d_a, Atoms& New, Atoms& Old, double3* 
   size_t Oldsize = 0; size_t Newsize = 0; size_t chainsize = 0;
   switch(MoveType)
   {
-    case TRANSLATION: case ROTATION: // Translation/Rotation Move //
+    case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: // Translation/Rotation Move //
     {
       Oldsize   = SystemComponents.Moleculesize[SelectedComponent];
       Newsize   = SystemComponents.Moleculesize[SelectedComponent];
@@ -185,7 +185,7 @@ double DNN_Prediction_Move(Components& SystemComponents, Simulations& Sims, size
     //###PATCH_LCLIN_DELETION###//
     return DNN_New;
   }
-  case TRANSLATION: case ROTATION: case SINGLE_INSERTION: case SINGLE_DELETION:
+  case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: case SINGLE_INSERTION: case SINGLE_DELETION:
   {
     double DNN_New = 0.0; double DNN_Old = 0.0;
     //###PATCH_ALLEGRO_SINGLE###//
@@ -298,7 +298,7 @@ bool Check_DNN_Drift(Variables& Vars, size_t systemId, MoveEnergy& tot)
     //printf("TRANSLATION/ROTATION: Bad Prediction, reject the move!!!\n");
     switch(MoveType)
     {
-      case TRANSLATION: case ROTATION:
+      case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION:
       {
         SystemComponents.TranslationRotationDNNReject ++; break;
       }

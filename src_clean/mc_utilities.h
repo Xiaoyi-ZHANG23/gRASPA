@@ -342,7 +342,7 @@ inline double GetPrefactor(Components& SystemComponents, Simulations& Sims, size
     {
       throw std::runtime_error("Sorry, but no IDENTITY_SWAP OPTION for now. That move uses its own function\n");
     }
-    case TRANSLATION: case ROTATION: case SPECIAL_ROTATION: 
+    case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: case SPECIAL_ROTATION:
     {
       preFactor = 1.0;
     }
@@ -510,6 +510,28 @@ static __global__ void get_new_position(Simulations& Sim, ForceField FF, size_t 
       Sim.Old.charge[i] = charge; 
       Sim.Old.scaleCoul[i] = scaleCoul; 
       Sim.Old.Type[i] = Type; 
+      Sim.Old.MolID[i] = MolID;
+      break;
+    }
+    case RANDOM_TRANSLATION:
+    {
+      // Random displacement: same vector applied to all atoms (rigid body move) //
+      // Matches RASPA2: displacement = (rand-0.5)*BoxLength for each axis       //
+      double3 BoxLength = {Sim.Box.Cell[0], Sim.Box.Cell[4], Sim.Box.Cell[8]};
+      double3 displacement = BoxLength * (RANDOM[index] - 0.5);
+      Sim.New.pos[i] = pos + displacement;
+
+      Sim.New.scale[i] = scale;
+      Sim.New.charge[i] = charge;
+      Sim.New.scaleCoul[i] = scaleCoul;
+      Sim.New.Type[i] = Type;
+      Sim.New.MolID[i] = MolID;
+
+      Sim.Old.pos[i] = pos;
+      Sim.Old.scale[i] = scale;
+      Sim.Old.charge[i] = charge;
+      Sim.Old.scaleCoul[i] = scaleCoul;
+      Sim.Old.Type[i] = Type;
       Sim.Old.MolID[i] = MolID;
       break;
     }

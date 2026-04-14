@@ -107,7 +107,7 @@ __device__ void Initialize_Vectors_thread(Complex* eik, size_t numberOfAtoms, in
 __device__ void Initialize_Copy_Positions_Together(Atoms*& d_a, Atoms& New, Atoms& Old, double3* temp, size_t Oldsize, size_t Newsize, size_t SelectedComponent, size_t Location, size_t chainsize, int MoveType)
 {
   size_t ij = blockIdx.x * blockDim.x + threadIdx.x;
-  if(MoveType == TRANSLATION || MoveType == ROTATION || MoveType == SPECIAL_ROTATION || MoveType == SINGLE_INSERTION || MoveType == SINGLE_DELETION) // Translation/Rotation/single_insertion/single_deletion //
+  if(MoveType == TRANSLATION || MoveType == RANDOM_TRANSLATION || MoveType == ROTATION || MoveType == SPECIAL_ROTATION || MoveType == SINGLE_INSERTION || MoveType == SINGLE_DELETION) // Translation/Rotation/single_insertion/single_deletion //
   {
     //For Translation/Rotation, the Old positions are already in the Old struct, just need to put the New positions into Old, after the Old positions//
     if(ij >= Oldsize)
@@ -467,7 +467,7 @@ double2 GPU_EwaldDifference_General(Simulations& Sim, ForceField& FF, Components
   }
   switch(MoveType)
   {
-    case TRANSLATION: case ROTATION: case SPECIAL_ROTATION: // Translation/Rotation Move //
+    case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: case SPECIAL_ROTATION: // Translation/Rotation Move //
     {
       Oldsize   = SystemComponents.Moleculesize[SelectedComponent];
       Newsize   = SystemComponents.Moleculesize[SelectedComponent];

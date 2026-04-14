@@ -146,7 +146,7 @@ void UpdateAtomInfoHost(Atoms& HostSystem, Atoms& HostTrial, size_t Molsize, int
   for(size_t i = 0; i < Molsize; i++)
   switch(MoveType)
   {
-    case TRANSLATION: case ROTATION: case SINGLE_INSERTION: case SPECIAL_ROTATION: case INSERTION: case REINSERTION:
+    case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: case SINGLE_INSERTION: case SPECIAL_ROTATION: case INSERTION: case REINSERTION:
     {
       size_t MolID = HostTrial.MolID[i];
       size_t index = Molsize * MolID + i;

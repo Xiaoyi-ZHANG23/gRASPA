@@ -16,7 +16,7 @@
 #define DEFAULTTHREAD 128
 double Get_Uniform_Random();
 
-enum MoveTypes {TRANSLATION = 0, ROTATION, SINGLE_INSERTION, SINGLE_DELETION, SPECIAL_ROTATION, INSERTION, DELETION, REINSERTION, CBCF_LAMBDACHANGE, CBCF_INSERTION, CBCF_DELETION, IDENTITY_SWAP, WIDOM};
+enum MoveTypes {TRANSLATION = 0, RANDOM_TRANSLATION, ROTATION, SINGLE_INSERTION, SINGLE_DELETION, SPECIAL_ROTATION, INSERTION, DELETION, REINSERTION, CBCF_LAMBDACHANGE, CBCF_INSERTION, CBCF_DELETION, IDENTITY_SWAP, WIDOM};
 
 enum CBMC_Types {CBMC_INSERTION = 0, CBMC_DELETION, REINSERTION_INSERTION, REINSERTION_RETRACE, IDENTITY_SWAP_NEW, IDENTITY_SWAP_OLD};
 
@@ -143,7 +143,7 @@ struct TMMC
     size_t BinLocation = (N - MinMacrostate) * nbinPerMacrostate + currentBin;
     switch(MoveType)
     {
-      case TRANSLATION: case ROTATION: case REINSERTION:
+      case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: case REINSERTION:
       {
         if(RejectOutofBound && ((N > MaxMacrostate) || (N < MinMacrostate))) return;
         CMatrix[BinLocation].y += 1.0; //If for GCMC, the Pacc for these moves is always 1. should check for this//
@@ -229,13 +229,13 @@ struct TMMC
     if(N < MinMacrostate || N > MaxMacrostate) return; //No bias for macrostate out of the bound
     switch(MoveType)
     {
-      case TRANSLATION: case ROTATION: case REINSERTION:
+      case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: case REINSERTION:
       {
         //Do not need the bias for moves that does not change the macrostate//
         break;
       }
       case INSERTION: case SINGLE_INSERTION: case CBCF_INSERTION:
-      { 
+      {
         if(RejectOutofBound && (N + 1) > MaxMacrostate) return;
         N -= MinMacrostate;
         double TMMCBias = WLBias[N + 1] - WLBias[N];
@@ -276,7 +276,7 @@ struct TMMC
     if(N < MinMacrostate || N > MaxMacrostate) return; //No bias for macrostate out of the bound
     switch(MoveType)
     {
-      case TRANSLATION: case ROTATION: case REINSERTION: case CBCF_LAMBDACHANGE:
+      case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: case REINSERTION: case CBCF_LAMBDACHANGE:
       {
         //Do not need the bias for moves that does not change the macrostate//
         break;
@@ -371,12 +371,12 @@ struct TMMC
     if(!RejectOutofBound) return;
     switch(MoveType)
     {
-      case TRANSLATION: case ROTATION: case REINSERTION:
+      case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: case REINSERTION:
       {
         //Do not need to determine accept/reject for moves that does not change the macrostate//
         break;
       }
-      case INSERTION: case SINGLE_INSERTION: 
+      case INSERTION: case SINGLE_INSERTION:
       {
         if(RejectOutofBound && (N + 1) > MaxMacrostate) Pacc = 0.0;
         break;
@@ -500,6 +500,7 @@ struct Move_Statistics
 {
   //Translation Move//
   double TranslationProb        =0.0;
+  double RandomTranslationProb  =0.0;
   double RotationProb           =0.0;
   double SpecialRotationProb    =0.0;
   double WidomProb              =0.0;
@@ -512,11 +513,14 @@ struct Move_Statistics
   double GibbsVolumeMoveProb    =0.0;
   double TotalProb              =0.0;
   //Translation Move//
-  int TranslationAccepted = 0; //zeroed when max translation updated 
+  int TranslationAccepted = 0; //zeroed when max translation updated
   int TranslationTotal = 0;    //zeroed when max translation updated
   int CumTranslationAccepted = 0; //Cumulative
   int CumTranslationTotal = 0;
   double TranslationAccRatio = 0.0;
+  //Random Translation Move//
+  int RandomTranslationAccepted = 0;
+  int RandomTranslationTotal = 0;
   //Rotation Move//
   int RotationAccepted = 0;    //zeroed when max rotation updated
   int RotationTotal = 0;       //zeroed when max rotation updated
@@ -568,6 +572,7 @@ struct Move_Statistics
   {
     //Zhao's note: the probabilities here are what we defined in simulation.input, raw values//
     TotalProb+=TranslationProb;
+    TotalProb+=RandomTranslationProb;
     TotalProb+=RotationProb;
     TotalProb+=SpecialRotationProb;
     TotalProb+=WidomProb;
@@ -582,6 +587,7 @@ struct Move_Statistics
     {
       //printf("TotalProb: %.5f\n", TotalProb);
       TranslationProb    /=TotalProb;
+      RandomTranslationProb /=TotalProb;
       RotationProb       /=TotalProb;
       SpecialRotationProb/=TotalProb;
       WidomProb          /=TotalProb;
@@ -593,7 +599,8 @@ struct Move_Statistics
       GibbsVolumeMoveProb/=TotalProb;
       TotalProb = 1.0;
     }
-    RotationProb        += TranslationProb;
+    RandomTranslationProb += TranslationProb;
+    RotationProb        += RandomTranslationProb;
     SpecialRotationProb += RotationProb;
     WidomProb           += SpecialRotationProb;
     ReinsertionProb     += WidomProb;
@@ -609,6 +616,7 @@ struct Move_Statistics
     printf("==================================================\n");
     printf("ACCUMULATED Probabilities:\n");
     printf("Translation Probability:      %.5f\n", TranslationProb);
+    printf("Random Translation Prob:      %.5f\n", RandomTranslationProb);
     printf("Rotation Probability:         %.5f\n", RotationProb);
     printf("Special Rotation Probability: %.5f\n", SpecialRotationProb);
     printf("Widom Probability:            %.5f\n", WidomProb);
@@ -660,6 +668,7 @@ struct Move_Statistics
     switch(MoveType)
     {
       case TRANSLATION: {TranslationTotal++; break; }
+      case RANDOM_TRANSLATION: {RandomTranslationTotal++; break; }
       case ROTATION: {RotationTotal++; break; }
       case SPECIAL_ROTATION: {SpecialRotationTotal++; break; }
       case INSERTION: case SINGLE_INSERTION: {InsertionTotal++; break; }
@@ -672,6 +681,7 @@ struct Move_Statistics
     switch(MoveType)
     {
       case TRANSLATION: {TranslationAccepted++; break; }
+      case RANDOM_TRANSLATION: {RandomTranslationAccepted++; break; }
       case ROTATION: {RotationAccepted++; break; }
       case SPECIAL_ROTATION: {SpecialRotationAccepted++; break; }
       case INSERTION: case SINGLE_INSERTION: {InsertionAccepted++; break; }
@@ -1206,7 +1216,7 @@ struct Components
         }
         break;
       }
-      case TRANSLATION: case ROTATION: case REINSERTION: case CBCF_LAMBDACHANGE:
+      case TRANSLATION: case RANDOM_TRANSLATION: case ROTATION: case REINSERTION: case CBCF_LAMBDACHANGE:
         break;
     }
   }

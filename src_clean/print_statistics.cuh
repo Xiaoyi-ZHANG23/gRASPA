@@ -46,6 +46,17 @@ static inline void Print_Translation_Statistics(Move_Statistics MoveStats, doubl
   fprintf(OUTPUT, "===========================================================\n");
 }
  
+static inline void Print_RandomTranslation_Statistics(Move_Statistics MoveStats, FILE* OUTPUT)
+{
+  if(MoveStats.RandomTranslationTotal == 0) return;
+  fprintf(OUTPUT, "=================RANDOM TRANSLATION MOVES==================\n");
+  fprintf(OUTPUT, "Random Translation Performed: %zu\n", (size_t)MoveStats.RandomTranslationTotal);
+  fprintf(OUTPUT, "Random Translation Accepted:  %zu\n", (size_t)MoveStats.RandomTranslationAccepted);
+  if(MoveStats.RandomTranslationTotal > 0)
+    fprintf(OUTPUT, "Random Translation Acc. Ratio: %.5f\n", (double)MoveStats.RandomTranslationAccepted / (double)MoveStats.RandomTranslationTotal);
+  fprintf(OUTPUT, "===========================================================\n");
+}
+
 static inline void Print_Rotation_Statistics(Move_Statistics MoveStats, double3 MaxRotation, FILE* OUTPUT)
 {
   if(MoveStats.CumRotationTotal == 0) return;
@@ -766,6 +777,7 @@ static inline void PrintAllStatistics(Components& SystemComponents, Simulations&
     if(SystemComponents.Moves[comp].TotalProb < 1e-10) continue;
     fprintf(SystemComponents.OUTPUT, "======================== MOVE STATISTICS FOR COMPONENT [%zu] (%s) ========================\n", comp,SystemComponents.MoleculeName[comp].c_str());
     Print_Translation_Statistics(SystemComponents.Moves[comp], SystemComponents.MaxTranslation[comp], SystemComponents.OUTPUT);
+    Print_RandomTranslation_Statistics(SystemComponents.Moves[comp], SystemComponents.OUTPUT);
     Print_Rotation_Statistics(SystemComponents.Moves[comp], SystemComponents.MaxRotation[comp], SystemComponents.OUTPUT);
     Print_SpecialRotation_Statistics(SystemComponents.Moves[comp], SystemComponents.MaxSpecialRotation[comp], SystemComponents.OUTPUT);
     Print_Swap_Statistics(SystemComponents.Moves[comp], SystemComponents.OUTPUT);

@@ -134,6 +134,17 @@ void RunMoves(Variables& Vars, size_t box_index, int Cycle)
       SystemComponents.Tmmc[comp].Update(1.0, SystemComponents.NumberOfMolecule_for_Component[comp], TRANSLATION);
     }
   }
+  else if(RANDOMNUMBER < SystemComponents.Moves[comp].RandomTranslationProb)
+  {
+    MoveType = RANDOM_TRANSLATION;
+    /////////////////////////////////////
+    // PERFORM RANDOM TRANSLATION MOVE //
+    /////////////////////////////////////
+    if(SystemComponents.NumberOfMolecule_for_Component[comp] > 0)
+    {
+      DeltaE = SingleBodyMove(Vars, box_index);
+    }
+  }
   else if(RANDOMNUMBER < SystemComponents.Moves[comp].RotationProb) //Rotation
   {
     MoveType = ROTATION;
