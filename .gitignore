@@ -1,1 +1,11 @@
 .tmp_backup/
+
+# Compiled binary
+src_clean/nvc_main.x
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Claude Code
+.claude/
