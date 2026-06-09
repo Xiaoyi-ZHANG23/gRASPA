@@ -1,0 +1,9 @@
+# rules to overwrite
+0
+# mixing rules to overwrite
+0
+# mixing rules to overwrite
+2
+# type type2 interaction
+Cu      O_co2  lennard-jones  40.000  3.100
+Cu      C_co2  lennard-jones  30.000  3.250
