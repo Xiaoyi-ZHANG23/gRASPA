@@ -19,6 +19,7 @@ debugging/
 ├── DEBUGGING.md       the same playbook, tool-agnostic (Codex/human)
 ├── REPRODUCE.md       copy-paste recipe to reproduce the real bug (parser repro + GPU A/B)
 ├── score.py           constant-results comparator (vendored from AutoJIT-gRASPA)
+├── selftest.sh        one-command health check of the GPU-free kit
 ├── repro/             standalone g++ reproductions of the parser bug
 └── test_case/         the agent-testable debugging challenge (see below)
 ```
@@ -36,6 +37,7 @@ silently dropped, so a CO₂/NaX-zeolite case adsorbs **0** CO₂ instead of ~17
 REPO=$(git rev-parse --show-toplevel)
 TC=$REPO/debugging/test_case
 
+bash "$REPO/debugging/selftest.sh"   # health-checks the whole GPU-free kit, or just the grader:
 bash "$TC/solution/grade.sh" "$TC/challenge/parser_under_test.cpp"   # RESULT: FAIL (the unfixed bug)
 bash "$TC/solution/grade.sh" "$TC/solution/parser_fixed.cpp"         # RESULT: PASS (reference fix)
 ```

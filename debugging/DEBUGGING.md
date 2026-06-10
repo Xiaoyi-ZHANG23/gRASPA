@@ -1,8 +1,9 @@
 # gRASPA Debugging Playbook (portable / tool-agnostic)
 
-> Harness-agnostic mirror of `.claude/skills/graspa-debug/SKILL.md` (the authoritative copy — if the
-> two diverge, defer to it). Readable by Codex, other agents, and humans. For a copy-paste
-> reproducible run, see [`REPRODUCE.md`](REPRODUCE.md).
+> Harness-agnostic mirror of [`SKILL.md`](SKILL.md) (the authoritative copy — if the two diverge,
+> defer to it; for Claude Code, install it by copying to `.claude/skills/graspa-debug/SKILL.md`).
+> Readable by Codex, other agents, and humans. For a copy-paste reproducible run, see
+> [`REPRODUCE.md`](REPRODUCE.md).
 
 Debug **gRASPA** (NVIDIA-GPU Monte Carlo adsorption simulator) energy/correctness discrepancies and
 `force_field.def` parser bugs by proving results are **constant** (deterministic, bit-comparable)

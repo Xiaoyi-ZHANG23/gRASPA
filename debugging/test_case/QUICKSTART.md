@@ -4,7 +4,7 @@ Goal: hand the challenge to an agent (Codex CLI or Claude Code), let it fix
 `challenge/parser_under_test.cpp`, then grade it. Tier 1 is GPU-free — just needs `g++`.
 
 ```bash
-REPO=/projects/p32082/gRASPA_repos/gRASPA
+REPO=$(git rev-parse --show-toplevel)   # run from inside this checkout (or set the absolute path)
 TC="$REPO/debugging/test_case"
 ```
 

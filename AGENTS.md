@@ -8,7 +8,8 @@ Then **[`debugging/DEBUGGING.md`](debugging/DEBUGGING.md)** (the playbook) and
 **[`debugging/REPRODUCE.md`](debugging/REPRODUCE.md)** (a copy-paste reproducible run). The matching
 Claude Code skill is **[`debugging/SKILL.md`](debugging/SKILL.md)** (install it by copying to
 `.claude/skills/graspa-debug/SKILL.md`; `.claude/` is gitignored here). A ready-to-run challenge for
-testing another agent is in **[`debugging/test_case/`](debugging/test_case/)**.
+testing another agent is in **[`debugging/test_case/`](debugging/test_case/)**. Sanity-check the
+whole GPU-free kit anytime with `bash debugging/selftest.sh` (needs only `g++` + `python3`).
 
 ## The one rule that matters: results must be CONSTANT
 gRASPA is deterministic for a fixed `RandomSeed`. To prove a bug or a fix, compare two runs of the

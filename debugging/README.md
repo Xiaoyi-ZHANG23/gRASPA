@@ -13,6 +13,7 @@ any deviation localizes a bug.
 | [`DEBUGGING.md`](DEBUGGING.md) | The full playbook (tool-agnostic; Codex/human-readable; mirrors SKILL.md). |
 | [`REPRODUCE.md`](REPRODUCE.md) | Copy-paste recipe: GPU-free parser repro + full GPU A/B. |
 | [`score.py`](score.py) | **Constant-results gate.** Vendored from AutoJIT-gRASPA. `python3 score.py <test> <ref>`. |
+| [`selftest.sh`](selftest.sh) | **One-command health check** of the GPU-free kit (repro + grader + `score.py` gotcha). |
 | [`repro/`](repro/) | Standalone `g++` reproductions of the parser bug (no GPU build). |
 | [`test_case/`](test_case/) | **Ready-to-run debugging challenge** for testing another agent (Codex/Claude) — symptom prompt, GPU-free repro, answer key + automated grader. See its `QUICKSTART.md`. |
 
@@ -23,11 +24,30 @@ This repo's `.gitignore` excludes `.claude/`, which is why the tracked/uploadabl
 
 ## 60-second start
 ```bash
-# GPU-free proof of the headline bug:
+# Verify the whole GPU-free kit on your machine (repro + grader + score.py; needs g++ & python3):
+bash selftest.sh
+
+# Or just the GPU-free proof of the headline bug:
 cd repro && g++ -O2 -std=c++17 parse_repro2.cpp -o parse_repro2
 ./parse_repro2 ../../Examples/CO2_NaX_Zeolite/force_field.def   # buggy → Nmixrule=0 ; fixed → 11
 ```
 Full GPU A/B (worktrees + `score.py`): see [`REPRODUCE.md`](REPRODUCE.md).
+
+## The method at a glance
+One git worktree + build per suspect version, the **same input with `RandomSeed 0`** in each, and
+`score.py` as the judge — gRASPA is deterministic for a fixed seed, so any divergence is a bug:
+
+```mermaid
+flowchart LR
+    I["same input,<br/>RandomSeed 0"] --> G["wt_good<br/>(known-good ref)"]
+    I --> H["wt_head<br/>(suspect HEAD)"]
+    I --> F["wt_fix<br/>(HEAD + candidate fix)"]
+    G --> S{"score.py<br/>constant-results gate"}
+    H --> S
+    F --> S
+    S -->|"good vs fix: no comparison-class failures"| OK["fix is correct & surgical"]
+    S -->|"good vs head: the failing check names what drifted"| BUG["bug localized"]
+```
 
 ## Two things that will bite you
 1. **stderr** — gRASPA prints its end-of-run energy + loadings to **stderr**. Always run with
