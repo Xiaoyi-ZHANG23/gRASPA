@@ -1,6 +1,6 @@
 ---
 name: graspa-debug
-description: Debug gRASPA energy/correctness discrepancies and force_field.def parser bugs by proving results are CONSTANT (deterministic, bit-comparable) across versions. Drives a git-worktree A/B method with RandomSeed 0 and a vendored correctness gate (debugging/score.py, from AutoJIT-gRASPA). Use when gRASPA results differ between versions or inputs, when forcefield overrides seem silently ignored, when a "zeolites differ but MOFs don't"-type bug is reported, or when validating a gRASPA fix against the Examples suite.
+description: Debug gRASPA energy/correctness discrepancies and force_field.def parser bugs by proving results are CONSTANT (deterministic, bit-comparable) across versions. Drives a git-worktree A/B method with RandomSeed 0 and a vendored correctness gate (debugging/score.py, from AutoJIT-gRASPA). Use when gRASPA results differ between versions or inputs, when forcefield overrides seem silently ignored, when a "zeolites differ but MOFs don't"-type bug is reported, when validating a gRASPA fix against the Examples suite, or as the PRE-MERGE GATE whenever a new feature/keyword/branch is added to gRASPA (sweep_compare.sh + an expected-diff manifest prove the change is surgical).
 ---
 
 # graspa-debug: Deterministic Bug-Hunting for gRASPA
@@ -142,6 +142,54 @@ After a fix, run the whole non-MLIP `Examples/` suite head-vs-fix and `score.py`
 should now match the good reference. `Examples/CO2_NaX_Zeolite/` is the Bug #4 regression case (ships
 `RandomSeed 0`, the trailing-marker `force_field.def`, and a reference `output.txt` — its first line
 is the exe-path banner; drop it when matching shipped format).
+
+## Validating a NEW Feature (run this on EVERY feature branch)
+
+The same machinery, run as a pre-merge gate. **Surgical** means: the feature changes the cases it
+is *supposed* to change and **nothing else** (no comparison-class failures anywhere else).
+
+1. **Declare intent first.** Write `expected_diffs.txt` — one `Examples/` case name per line for
+   every case the feature SHOULD change. Everything not listed must stay comparison-clean. An
+   empty manifest = "pure refactor / new-keyword-only: nothing may change." Commit the manifest
+   *before* (or separately from) the feature change, so intent-first is evidenced — not
+   self-reported.
+2. **Give the feature a regression case.** Add an `Examples/` case that exercises the new
+   input/feature with `RandomSeed 0`, and commit its vetted `output.txt` as the reference —
+   exactly what `Examples/CO2_NaX_Zeolite/` is for Bug #4. (The vetted reference needs a GPU run;
+   until you have one, mark the case "reference pending" in its README — see the caveat in
+   step 6.)
+3. **Baseline runs:** build the base branch in a worktree; run every non-MLIP example →
+   `runs_base/<case>/output.txt` (always `> output.txt 2>&1`).
+4. **Feature runs:** same inputs, feature build → `runs_feat/<case>/output.txt`.
+5. **The gate:**
+   ```bash
+   bash debugging/sweep_compare.sh runs_base runs_feat expected_diffs.txt
+   # exit 0 = surgical. Verdicts: CONSTANT / EXPECTED-DIFF (ok) ·
+   #          UNEXPECTED-DIFF / EXPECTED-MISSING / ERROR (fail)
+   ```
+   **UNEXPECTED-DIFF** = a regression — the failing check names what drifted (moves? counts? one
+   energy component?); localize with the specificity test / standalone repro above.
+   **EXPECTED-MISSING** = the feature didn't actually do what it claims — equally a finding.
+6. **GPU-free shortcut for input/parser features:** extract the touched reader into a standalone
+   harness (pattern: `test_case/challenge/parser_under_test.cpp`) that prints, per input file,
+   the fired branch(es) and parsed values; then gate base-vs-feature traces over EVERY
+   `Examples/*/simulation.input` (or `force_field.def`) with **`sweep_compare.sh --diff`**
+   (byte-exact mode — plain `score.py` mode can only parse full gRASPA outputs). Seconds per
+   sweep, before any GPU build. Caveats, all field-tested:
+   - ⚠️ **Substring keyword matching.** gRASPA matches input keywords with bare `str.find`, so a
+     new keyword that contains — or is contained by — an existing one (`Pressure`,
+     `FugacityCoefficient`, …) silently triggers the wrong branch. **Standard fix: match the
+     keyword as an exact first token** (tokenize the line, compare `tokens[0]`), never bare
+     `find`. (A naive `Fugacity` keyword corrupted 38/44 example inputs via their
+     `FugacityCoefficient` lines; the token-exact version swept clean — see `FIELD_TEST.md`.)
+   - ⚠️ **Old binaries silently swallow new keywords** — and `Check_Inputs_In_read_data_cpp`
+     "validates" keywords by substring-grepping the *source*, so it can falsely accept a new
+     keyword on an old build too (which then quietly runs with the old behavior). State the
+     minimum gRASPA version wherever the new keyword is documented.
+   - The harness is a hand-copied mirror of production code: re-diff it against
+     `src_clean/read_data.cpp` whenever either changes. And a clean parse-level sweep proves the
+     **reader** is surgical — not the physics. The full-run gate (steps 3–5) is still required
+     before merge.
 
 ## Known-Bug Catalog — commit `186e4d3` (4 bugs, all fixed; for pattern-matching)
 This fork already has the fix merged (branch `fix/lj1264-forcefield-parser`, PR #81). A/B SHAs:

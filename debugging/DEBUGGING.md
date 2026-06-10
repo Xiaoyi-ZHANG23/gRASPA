@@ -101,6 +101,32 @@ the good reference. `../Examples/CO2_NaX_Zeolite/` is the Bug #4 regression case
 trailing-marker `force_field.def`, reference `output.txt` — drop its first exe-path banner line when
 matching shipped format).
 
+## Validating a NEW feature (run on EVERY feature branch)
+Same machinery as a pre-merge gate. **Surgical** = the feature changes only what it is supposed to.
+1. **Declare intent first:** `expected_diffs.txt` — one case name per line that SHOULD change
+   (empty = nothing may change). Commit the manifest *before* (or separately from) the feature
+   change so intent-first is evidenced, not self-reported.
+2. **Give the feature a regression case** in `../Examples/` (`RandomSeed 0` + vetted reference
+   `output.txt`), like `CO2_NaX_Zeolite` is for Bug #4. (The reference needs a GPU run; until
+   then, mark the case "reference pending" in its README.)
+3. **Run the suite on both builds** (base worktree + feature worktree, identical inputs,
+   `> output.txt 2>&1`) → `runs_base/<case>/output.txt`, `runs_feat/<case>/output.txt`.
+4. **Gate:** `bash debugging/sweep_compare.sh runs_base runs_feat expected_diffs.txt` — exit 0 =
+   surgical. UNEXPECTED-DIFF = regression (the failing check names what drifted);
+   EXPECTED-MISSING = the feature is inert — equally a finding.
+5. **Input/parser features, GPU-free shortcut:** standalone reader harness (pattern:
+   `test_case/challenge/parser_under_test.cpp`) printing fired branch(es) + parsed values per
+   input, swept base-vs-feature over every `Examples/*/simulation.input` and gated with
+   `sweep_compare.sh --diff` (byte-exact; plain mode only parses full gRASPA outputs).
+   Field-tested caveats: ⚠️ gRASPA matches keywords by **substring** (`str.find`) — a new keyword
+   containing/contained-by an existing one (`Pressure`, `FugacityCoefficient`, …) silently
+   triggers the wrong branch; **fix = match the keyword as an exact first token**, never bare
+   `find` (a naive `Fugacity` keyword corrupted 38/44 example inputs — see `FIELD_TEST.md`).
+   ⚠️ Old binaries silently swallow new keywords (and `Check_Inputs_In_read_data_cpp` greps the
+   *source* for them, so it can falsely accept them) — document the minimum version. A clean
+   parse-level sweep proves the **reader** is surgical, not the physics: the full-run gate
+   (steps 3–4) is still required before merge.
+
 ## Known-bug catalog — commit `186e4d3` (4 bugs, fixed; for pattern-matching)
 Fork already has the fix merged (branch `fix/lj1264-forcefield-parser`, PR #81). A/B SHAs: good ref
 `3a88f7f` · bug `186e4d3` · fix `ea5a825` · regression-case add `cd680e1`.

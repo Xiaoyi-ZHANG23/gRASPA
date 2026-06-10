@@ -15,11 +15,14 @@ Everything is GPU-free at its core (a `g++` one-liner); a full-GPU tier is optio
 debugging/
 ├── TUTORIAL.md        <- you are here
 ├── README.md          index of the kit
-├── SKILL.md           the graspa-debug skill (Claude Code) — install: copy to .claude/skills/graspa-debug/
+├── SKILL.md           the graspa-debug skill (Claude Code) — install: bash install_skill.sh
 ├── DEBUGGING.md       the same playbook, tool-agnostic (Codex/human)
 ├── REPRODUCE.md       copy-paste recipe to reproduce the real bug (parser repro + GPU A/B)
 ├── score.py           constant-results comparator (vendored from AutoJIT-gRASPA)
 ├── selftest.sh        one-command health check of the GPU-free kit
+├── sweep_compare.sh   pre-merge feature gate: score.py sweep + expected-diff manifest (--diff for harness traces)
+├── install_skill.sh   one-command Claude Code skill install (--user / --project)
+├── FIELD_TEST.md      case study: the new-feature workflow field-tested on a mock Fugacity keyword
 ├── repro/             standalone g++ reproductions of the parser bug
 └── test_case/         the agent-testable debugging challenge (see below)
 ```
@@ -107,6 +110,39 @@ python3 debugging/score.py a.txt reference.txt   # 0 = constant; read the JSON "
 git worktree add ../wt_good <good_sha> && git worktree add ../wt_head HEAD
 ```
 Full runnable example (the bug this kit is built around): `debugging/REPRODUCE.md`.
+
+---
+
+## Part C — Run the gate on EVERY new feature (pre-merge)
+
+Whenever you add a feature/keyword to gRASPA, prove it is **surgical** before merging:
+
+```bash
+# 1. Declare intent: which Examples cases SHOULD this feature change? (empty file = none)
+echo "MyNewFeature_Case" > expected_diffs.txt
+
+# 2. Run the suite on BOTH builds (base worktree + feature worktree), RandomSeed 0, 2>&1:
+#    runs_base/<case>/output.txt   and   runs_feat/<case>/output.txt
+
+# 3. The gate:
+bash debugging/sweep_compare.sh runs_base runs_feat expected_diffs.txt   # exit 0 = surgical
+```
+
+`UNEXPECTED-DIFF` = a regression (the failing check names what drifted); `EXPECTED-MISSING` = the
+feature didn't do what it claims. For input/parser features there's a GPU-free shortcut — sweep a
+standalone reader harness over every `Examples/*/simulation.input`; gRASPA matches keywords by
+**substring**, so collisions with existing keywords are a real hazard. Full workflow: "Validating a
+NEW feature" in `debugging/SKILL.md` / `DEBUGGING.md`.
+
+---
+
+## Install / share the skill
+```bash
+bash debugging/install_skill.sh             # user-level: ~/.claude/skills/graspa-debug/
+bash debugging/install_skill.sh --project   # this clone only
+```
+Codex needs no install (root `AGENTS.md` is auto-read). The kit is self-contained — anyone who
+clones this repo can run `bash debugging/selftest.sh` and start using it.
 
 ---
 

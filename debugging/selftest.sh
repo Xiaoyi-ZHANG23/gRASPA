@@ -72,6 +72,35 @@ else
   head -20 "$TMP/score.json" 2>/dev/null | sed 's/^/      /'
 fi
 
+echo "== 4. sweep_compare.sh (pre-merge feature gate) =="
+mkdir -p "$TMP/base/caseA" "$TMP/feat/caseA" "$TMP/base/caseB" "$TMP/feat/caseB"
+cp "$ref" "$TMP/base/caseA/output.txt"; cp "$ref" "$TMP/feat/caseA/output.txt"
+cp "$ref" "$TMP/base/caseB/output.txt"
+sed 's/PseudoAtom Type: Al\[0\], #: 55/PseudoAtom Type: Al[0], #: 54/' "$ref" > "$TMP/feat/caseB/output.txt"
+if bash "$HERE/sweep_compare.sh" "$TMP/base" "$TMP/feat" >"$TMP/sw1.log" 2>&1; then
+  bad "sweep with an injected diff (caseB) PASSed — it should FAIL"
+else
+  if grep -q 'UNEXPECTED-DIFF' "$TMP/sw1.log" && grep -q 'caseA *CONSTANT' "$TMP/sw1.log"; then
+    ok "no-manifest sweep: caseA CONSTANT, injected caseB flagged UNEXPECTED-DIFF"
+  else
+    bad "no-manifest sweep gave unexpected verdicts:"; sed 's/^/      /' "$TMP/sw1.log"
+  fi
+fi
+echo "caseB" > "$TMP/manifest.txt"
+if bash "$HERE/sweep_compare.sh" "$TMP/base" "$TMP/feat" "$TMP/manifest.txt" >"$TMP/sw2.log" 2>&1; then
+  ok "manifest sweep: declared diff (caseB) accepted as EXPECTED-DIFF — surgical"
+else
+  bad "manifest sweep should PASS when the diff is declared:"; sed 's/^/      /' "$TMP/sw2.log"
+fi
+mkdir -p "$TMP/db/caseT" "$TMP/dt/caseT"
+printf 'branch=Pressure P=10000\n' > "$TMP/db/caseT/output.txt"
+printf 'branch=Fugacity P=25000\n' > "$TMP/dt/caseT/output.txt"
+if bash "$HERE/sweep_compare.sh" --diff "$TMP/db" "$TMP/dt" >"$TMP/sw3.log" 2>&1; then
+  bad "--diff mode missed a byte-level trace difference"
+else
+  ok "--diff mode (harness traces): byte diff flagged UNEXPECTED-DIFF"
+fi
+
 echo
 if [ "$pass" -eq 1 ]; then
   echo "RESULT: PASS — debugging kit is healthy on this machine."

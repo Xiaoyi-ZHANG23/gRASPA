@@ -14,21 +14,45 @@ any deviation localizes a bug.
 | [`REPRODUCE.md`](REPRODUCE.md) | Copy-paste recipe: GPU-free parser repro + full GPU A/B. |
 | [`score.py`](score.py) | **Constant-results gate.** Vendored from AutoJIT-gRASPA. `python3 score.py <test> <ref>`. |
 | [`selftest.sh`](selftest.sh) | **One-command health check** of the GPU-free kit (repro + grader + `score.py` gotcha). |
+| [`sweep_compare.sh`](sweep_compare.sh) | **Pre-merge feature gate.** Sweeps `score.py` over base-vs-feature run dirs against an expected-diff manifest. |
+| [`install_skill.sh`](install_skill.sh) | **One-command skill install** for Claude Code (`--user` or `--project`). |
+| [`FIELD_TEST.md`](FIELD_TEST.md) | Case study: the new-feature workflow field-tested on a mock `Fugacity` keyword (naive version broke 38/44 inputs; the workflow caught it). |
 | [`repro/`](repro/) | Standalone `g++` reproductions of the parser bug (no GPU build). |
 | [`test_case/`](test_case/) | **Ready-to-run debugging challenge** for testing another agent (Codex/Claude) — symptom prompt, GPU-free repro, answer key + automated grader. See its `QUICKSTART.md`. |
 
-**Activate the skill for Claude Code:** copy `SKILL.md` to `.claude/skills/graspa-debug/SKILL.md`.
-This repo's `.gitignore` excludes `.claude/`, which is why the tracked/uploadable copy lives here in
-`debugging/` (same pattern AutoJIT-gRASPA uses for its root `SKILL.md`). For **Codex**, see
-`../AGENTS.md`.
+## Install / share the skill
+Anyone with a clone of this repo gets the whole kit — it is self-contained (`score.py` is
+vendored). To activate the Claude Code skill:
 
-## 60-second start
+```bash
+bash debugging/install_skill.sh             # user-level (~/.claude/skills/) — all your projects
+bash debugging/install_skill.sh --project   # this clone only (<repo>/.claude/skills/)
+```
+
+This repo's `.gitignore` excludes `.claude/`, which is why the tracked/shareable copy lives here in
+`debugging/SKILL.md` (same pattern AutoJIT-gRASPA uses for its root `SKILL.md`). **Codex** and other
+agents need no install — the repo-root `../AGENTS.md` points them at `DEBUGGING.md` automatically.
+
+## Use it on every new feature
+Before merging any feature branch, run the **pre-merge gate**: declare which `Examples/` cases the
+feature *should* change in a manifest, run the suite on base and feature builds (`RandomSeed 0`,
+`2>&1`), then:
+
+```bash
+bash debugging/sweep_compare.sh runs_base runs_feat expected_diffs.txt   # exit 0 = surgical
+```
+
+Anything `UNEXPECTED-DIFF` is a regression; anything `EXPECTED-MISSING` means the feature didn't do
+what it claims. Full workflow: the "Validating a NEW feature" section of
+[`SKILL.md`](SKILL.md) / [`DEBUGGING.md`](DEBUGGING.md).
+
+## 60-second start (run from the repo root)
 ```bash
 # Verify the whole GPU-free kit on your machine (repro + grader + score.py; needs g++ & python3):
-bash selftest.sh
+bash debugging/selftest.sh
 
 # Or just the GPU-free proof of the headline bug:
-cd repro && g++ -O2 -std=c++17 parse_repro2.cpp -o parse_repro2
+cd debugging/repro && g++ -O2 -std=c++17 parse_repro2.cpp -o parse_repro2
 ./parse_repro2 ../../Examples/CO2_NaX_Zeolite/force_field.def   # buggy → Nmixrule=0 ; fixed → 11
 ```
 Full GPU A/B (worktrees + `score.py`): see [`REPRODUCE.md`](REPRODUCE.md).

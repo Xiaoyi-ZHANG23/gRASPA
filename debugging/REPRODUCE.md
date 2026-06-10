@@ -12,7 +12,7 @@ on a correct binary yields **bit-comparable** energies and loadings. If a step h
 reproducible on your machine, that is itself a finding — check seed, build flags, and the `2>&1`
 capture before anything else.
 
-## A/B commits (also in ../CLONE_INFO.md / git log)
+## A/B commits (see git log)
 | Role | SHA | Note |
 |------|-----|------|
 | good reference | `3a88f7f` | last commit BEFORE the 12-6-4 refactor |
@@ -38,7 +38,8 @@ g++ -O2 -std=c++17 parse_repro2.cpp -o parse_repro2
 - fixed first-pass (first-occurrence-wins): **`Nmixrule = 11`** → overrides applied.
 
 Why the trigger works: `Examples/CO2_NaX_Zeolite/force_field.def` has a real overrides block
-(11 pairs, lines 3-16) followed by a **trailing** `# mixing rules to overwrite` / `0` (lines 17-18).
+(marker + count at lines 3-4, 11 pairs at lines 6-16) followed by a **trailing**
+`# mixing rules to overwrite` / `0` (lines 17-18).
 The buggy scan keeps reassigning `mixrule_startline` so the LAST marker (count 0) wins. MOF inputs
 have a single marker, so they're unaffected — hence "zeolites differ, MOFs don't."
 

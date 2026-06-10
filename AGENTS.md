@@ -31,6 +31,14 @@ GOTCHA: gRASPA prints its final energy + loadings to **stderr** — always run w
 `-tp haswell` or the binary SIGILLs (exit 132) on A100 nodes; energy kernels are CUDA so `-tp` never
 affects results.
 
+## When you add a NEW feature
+Run the pre-merge gate before merging: declare the cases the feature should change in a manifest,
+run the Examples suite on base + feature builds (`RandomSeed 0`, `2>&1`), then
+`bash debugging/sweep_compare.sh runs_base runs_feat expected_diffs.txt` — exit 0 = surgical.
+⚠️ gRASPA matches input keywords by substring (`str.find`); sweep ALL Examples inputs through any
+new/changed reader (GPU-free harness pattern in `debugging/test_case/challenge/`) to catch keyword
+collisions. Full workflow: "Validating a NEW feature" in `debugging/DEBUGGING.md`.
+
 ## When you fix parser/override code
 **WARN on unrecognized lines; never silently drop them**, then re-run the whole `Examples/` suite
 through `debugging/score.py` to prove the fix is surgical. See the `186e4d3` bug catalog in
