@@ -1270,10 +1270,71 @@ void read_movies_stats_print(Components& SystemComponents, size_t sim)
         }
       }
     }
+    //=== 3D spatial adsorbate-density grid keywords (RASPA2 ComputeDensityProfile3DVTKGrid parity) ===//
+    //NOTE: gRASPA matches keywords by SUBSTRING (str.find). We therefore confirm token[0] is an
+    //EXACT match before acting, so a longer/shorter keyword cannot silently trigger the wrong branch.
+    if (str.find("ComputeDensityGrid", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "ComputeDensityGrid")
+      {
+        if(termsScannedLined.size() > 1 && caseInSensStringCompare(termsScannedLined[1], "yes"))
+          SystemComponents.ComputeDensityGrid = true;
+        else if(termsScannedLined.size() <= 1)
+          fprintf(SystemComponents.OUTPUT, "Warning: ComputeDensityGrid has no yes/no argument, leaving density grid OFF\n");
+      }
+    }
+    if (str.find("DensityGridPoints", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "DensityGridPoints")
+      {
+        int nx = 0, ny = 0, nz = 0;
+        if(termsScannedLined.size() > 3 &&
+           sscanf(termsScannedLined[1].c_str(), "%d", &nx) == 1 &&
+           sscanf(termsScannedLined[2].c_str(), "%d", &ny) == 1 &&
+           sscanf(termsScannedLined[3].c_str(), "%d", &nz) == 1 &&
+           nx > 0 && ny > 0 && nz > 0)
+          SystemComponents.DensityGridPoints = {nx, ny, nz};
+        else
+          fprintf(SystemComponents.OUTPUT, "Warning: DensityGridPoints malformed (need 3 positive integers: nx ny nz), keeping default %d x %d x %d\n", SystemComponents.DensityGridPoints.x, SystemComponents.DensityGridPoints.y, SystemComponents.DensityGridPoints.z);
+      }
+    }
+    if (str.find("DensityGridSampleEvery", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "DensityGridSampleEvery")
+      {
+        size_t every = 0;
+        if(termsScannedLined.size() > 1 && sscanf(termsScannedLined[1].c_str(), "%zu", &every) == 1 && every > 0)
+          SystemComponents.DensityGridSampleEvery = every;
+        else
+          fprintf(SystemComponents.OUTPUT, "Warning: DensityGridSampleEvery malformed (need 1 positive integer), keeping default %zu\n", SystemComponents.DensityGridSampleEvery);
+      }
+    }
+    if (str.find("DensityGridWriteEvery", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "DensityGridWriteEvery")
+      {
+        size_t every = 0;
+        if(termsScannedLined.size() > 1 && sscanf(termsScannedLined[1].c_str(), "%zu", &every) == 1 && every > 0)
+          SystemComponents.DensityGridWriteEvery = every;
+        else
+          fprintf(SystemComponents.OUTPUT, "Warning: DensityGridWriteEvery malformed (need 1 positive integer), keeping default %zu\n", SystemComponents.DensityGridWriteEvery);
+      }
+    }
   }
   //printf("Writing Movies every %zu MC step(s) or cycle(s)\n", SystemComponents.MoviesEvery);
   //printf("Printing Loadings and energies every %zu MC step(s) or cycle(s)\n", SystemComponents.PrintStatsEvery);
   if(SystemComponents.OUTPUT != stderr) //printf("Saving Output to File!\n");
+  //One-line banner mirroring RASPA2's "3D density grid for adsorbates: yes|no"//
+  if(SystemComponents.ComputeDensityGrid)
+    fprintf(SystemComponents.OUTPUT, "3D density grid for adsorbates: yes (%d x %d x %d, sampled every %zu cycle(s), written every %zu cycle(s))\n",
+            SystemComponents.DensityGridPoints.x, SystemComponents.DensityGridPoints.y, SystemComponents.DensityGridPoints.z,
+            SystemComponents.DensityGridSampleEvery, SystemComponents.DensityGridWriteEvery);
+  else
+    fprintf(SystemComponents.OUTPUT, "3D density grid for adsorbates: no\n");
   file.close();
 }
 

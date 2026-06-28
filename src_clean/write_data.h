@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <iomanip>
+#include <cmath>
 
 
 static inline void WriteBox_LAMMPS(Atoms* System, Components& SystemComponents, ForceField& FF, Boxsize& Box, std::ofstream& textrestartFile, std::vector<std::string>& AtomNames)
@@ -224,7 +225,151 @@ static inline void create_movie_file(Atoms* System, Components& SystemComponents
   textrestartFile.close();
 }
 
-static inline void copyFile(const std::string& sourcePath, const std::string& destinationPath) 
+//============================================================================//
+//  3D spatial adsorbate-density grid (RASPA2 ComputeDensityProfile3DVTKGrid)  //
+//                                                                            //
+//  Accumulate_DensityGrid: bin every adsorbate atom of every adsorbate       //
+//  component into an nx*ny*nz histogram over the unit cell (one snapshot).    //
+//  WriteDensityGrid: normalize to average number density and write one        //
+//  Gaussian .cube (triclinic-correct) + one VTK StructuredPoints (orthorhombic//
+//  assumption) file per adsorbate component, under DensityGrid/System_<id>/.  //
+//============================================================================//
+
+//Accumulate one snapshot of adsorbate positions into the per-component grid.//
+//Requires SystemComponents.HostSystem to already hold the current device positions//
+//(copied via Copy_AtomData_from_Device) and HostBox.InverseCell to be host-resident.//
+static inline void Accumulate_DensityGrid(Components& SystemComponents, Boxsize& HostBox)
+{
+  const int nx = SystemComponents.DensityGridPoints.x;
+  const int ny = SystemComponents.DensityGridPoints.y;
+  const int nz = SystemComponents.DensityGridPoints.z;
+  const size_t Nvoxel = (size_t)nx * (size_t)ny * (size_t)nz;
+
+  //Lazily allocate per-component accumulators (adsorbate components only)//
+  if(SystemComponents.DensityGrid.size() != (size_t)SystemComponents.NComponents.x)
+  {
+    SystemComponents.DensityGrid.assign((size_t)SystemComponents.NComponents.x, std::vector<double>());
+    for(int comp = SystemComponents.NComponents.y; comp < SystemComponents.NComponents.x; comp++)
+      SystemComponents.DensityGrid[comp].assign(Nvoxel, 0.0);
+  }
+
+  const double* Inv = HostBox.InverseCell; //fractional s = InverseCell * pos (see ewald_preparation.h:52)//
+  for(int comp = SystemComponents.NComponents.y; comp < SystemComponents.NComponents.x; comp++)
+  {
+    Atoms& A = SystemComponents.HostSystem[comp];
+    std::vector<double>& Grid = SystemComponents.DensityGrid[comp];
+    if(Grid.size() != Nvoxel) continue;
+    for(size_t j = 0; j < A.size; j++)
+    {
+      const double3 p = A.pos[j];
+      double sx = Inv[0]*p.x + Inv[3]*p.y + Inv[6]*p.z;
+      double sy = Inv[1]*p.x + Inv[4]*p.y + Inv[7]*p.z;
+      double sz = Inv[2]*p.x + Inv[5]*p.y + Inv[8]*p.z;
+      //wrap fractional coordinate into [0,1)//
+      sx -= std::floor(sx); sy -= std::floor(sy); sz -= std::floor(sz);
+      int ix = (int)(sx * nx); if(ix >= nx) ix = nx - 1; if(ix < 0) ix = 0;
+      int iy = (int)(sy * ny); if(iy >= ny) iy = ny - 1; if(iy < 0) iy = 0;
+      int iz = (int)(sz * nz); if(iz >= nz) iz = nz - 1; if(iz < 0) iz = 0;
+      Grid[(size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz] += 1.0;
+    }
+  }
+  SystemComponents.DensityGridSamples++;
+}
+
+//Write the accumulated grid for every adsorbate component (number density, molecules/Angstrom^3).//
+static inline void WriteDensityGrid(Components& SystemComponents, Boxsize& HostBox, size_t SystemIndex)
+{
+  if(!SystemComponents.ComputeDensityGrid) return;
+  if(SystemComponents.DensityGridSamples == 0 || SystemComponents.DensityGrid.empty()) return;
+
+  const int nx = SystemComponents.DensityGridPoints.x;
+  const int ny = SystemComponents.DensityGridPoints.y;
+  const int nz = SystemComponents.DensityGridPoints.z;
+  const size_t Nvoxel  = (size_t)nx * (size_t)ny * (size_t)nz;
+  const double Nsamp   = (double)SystemComponents.DensityGridSamples;
+  const double voxelVolume = HostBox.Volume / (double)Nvoxel; //Angstrom^3 per voxel//
+  const double norm    = 1.0 / (Nsamp * voxelVolume);         //counts -> molecules/Angstrom^3//
+  const double ANG_TO_BOHR = 1.8897259885789;                 //Gaussian .cube geometry is in Bohr//
+
+  //Lattice vectors as rows of HostBox.Cell (see matrix_multiply_by_vector in maths.cuh)//
+  const double* C = HostBox.Cell;
+  const double ax = C[0], ay = C[1], az = C[2]; //a-vector//
+  const double bx = C[3], by = C[4], bz = C[5]; //b-vector//
+  const double cx = C[6], cy = C[7], cz = C[8]; //c-vector//
+  const double alen = std::sqrt(ax*ax + ay*ay + az*az);
+  const double blen = std::sqrt(bx*bx + by*by + bz*bz);
+  const double clen = std::sqrt(cx*cx + cy*cy + cz*cz);
+
+  std::string dirname = "DensityGrid/System_" + std::to_string(SystemIndex) + "/";
+  std::filesystem::path cwd = std::filesystem::current_path();
+  std::filesystem::create_directories(cwd / dirname);
+
+  for(int comp = SystemComponents.NComponents.y; comp < SystemComponents.NComponents.x; comp++)
+  {
+    std::vector<double>& Grid = SystemComponents.DensityGrid[comp];
+    if(Grid.size() != Nvoxel) continue;
+    std::string mname = (comp < (int)SystemComponents.MoleculeName.size()) ? SystemComponents.MoleculeName[comp] : ("Component_" + std::to_string(comp));
+    std::string base  = dirname + "DensityGrid_" + std::to_string(comp) + "_" + mname;
+
+    //---- Gaussian .cube : triclinic-correct via voxel vectors (geometry in Bohr) ----//
+    {
+      std::ofstream f(cwd / (base + ".cube"), std::ios::out);
+      f << "gRASPA 3D adsorbate density grid (RASPA2 ComputeDensityProfile3DVTKGrid parity)\n";
+      f << "Component " << comp << " (" << mname << "); scalar = number density [molecules/Angstrom^3]; "
+        << SystemComponents.DensityGridSamples << " snapshots\n";
+      //Natoms (1 marker atom at origin), origin in Bohr//
+      f << std::fixed << std::setprecision(6);
+      f << "    1    0.000000    0.000000    0.000000\n";
+      f << std::scientific << std::setprecision(6);
+      f << nx << " " << (ax/nx)*ANG_TO_BOHR << " " << (ay/nx)*ANG_TO_BOHR << " " << (az/nx)*ANG_TO_BOHR << "\n";
+      f << ny << " " << (bx/ny)*ANG_TO_BOHR << " " << (by/ny)*ANG_TO_BOHR << " " << (bz/ny)*ANG_TO_BOHR << "\n";
+      f << nz << " " << (cx/nz)*ANG_TO_BOHR << " " << (cy/nz)*ANG_TO_BOHR << " " << (cz/nz)*ANG_TO_BOHR << "\n";
+      //marker atom: hydrogen at cell origin//
+      f << "    1    1.000000    0.000000    0.000000    0.000000\n";
+      //volumetric data: ix outer, iy middle, iz inner (matches our flat index)//
+      for(int ix = 0; ix < nx; ix++)
+        for(int iy = 0; iy < ny; iy++)
+        {
+          int col = 0;
+          for(int iz = 0; iz < nz; iz++)
+          {
+            double val = Grid[(size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz] * norm;
+            f << " " << std::setw(13) << val;
+            if(++col % 6 == 0) { f << "\n"; }
+          }
+          if(col % 6 != 0) f << "\n";
+        }
+      f.close();
+    }
+
+    //---- VTK StructuredPoints (ASCII): assumes ORTHORHOMBIC cell, geometry in Angstrom ----//
+    {
+      std::ofstream f(cwd / (base + ".vtk"), std::ios::out);
+      f << "# vtk DataFile Version 3.0\n";
+      f << "gRASPA 3D adsorbate density grid, component " << comp << " (" << mname
+        << "), number density [molecules/Angstrom^3], " << SystemComponents.DensityGridSamples << " snapshots\n";
+      f << "ASCII\n";
+      f << "DATASET STRUCTURED_POINTS\n";
+      f << "DIMENSIONS " << nx << " " << ny << " " << nz << "\n";
+      f << "ORIGIN 0 0 0\n";
+      f << std::scientific << std::setprecision(8);
+      f << "SPACING " << (alen/nx) << " " << (blen/ny) << " " << (clen/nz) << "\n";
+      f << "POINT_DATA " << Nvoxel << "\n";
+      f << "SCALARS number_density double 1\n";
+      f << "LOOKUP_TABLE default\n";
+      //VTK ordering: X fastest, then Y, then Z//
+      for(int iz = 0; iz < nz; iz++)
+        for(int iy = 0; iy < ny; iy++)
+          for(int ix = 0; ix < nx; ix++)
+            f << (Grid[(size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz] * norm) << "\n";
+      f.close();
+    }
+    fprintf(SystemComponents.OUTPUT, "Wrote 3D density grid for component %d (%s): %s.cube / .vtk (%d x %d x %d, %zu snapshots)\n",
+            comp, mname.c_str(), base.c_str(), nx, ny, nz, SystemComponents.DensityGridSamples);
+  }
+}
+
+static inline void copyFile(const std::string& sourcePath, const std::string& destinationPath)
 {
   std::ifstream source(sourcePath, std::ios::binary);
   std::ofstream destination(destinationPath, std::ios::binary);

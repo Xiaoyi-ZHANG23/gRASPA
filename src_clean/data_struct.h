@@ -1035,6 +1035,14 @@ struct Components
   std::vector<double2>VolumeAverage;
   std::vector<std::vector<double2>>DensityPerComponent;
 
+  //=== 3D spatial adsorbate-density grid (RASPA2 ComputeDensityProfile3DVTKGrid parity) ===//
+  bool   ComputeDensityGrid       = false;            // Default OFF: existing runs are byte-for-byte unchanged
+  int3   DensityGridPoints        = {150, 150, 150};  // nx, ny, nz voxels spanning the unit cell
+  size_t DensityGridSampleEvery   = 10;               // Accumulate adsorbate positions every X production cycles
+  size_t DensityGridWriteEvery    = 5000;             // Flush the grid to disk every X production cycles (also flushed at end of production)
+  size_t DensityGridSamples       = 0;                // Number of snapshots accumulated so far (normalization denominator)
+  std::vector<std::vector<double>> DensityGrid;       // [component][ix*ny*nz + iy*nz + iz] -> accumulated atom occupancy counts
+
   std::vector<double>Compressibility;            //Compressibility for each component, calculated when PR-EOS is used//
   std::vector<double>AmountOfExcessMolecules;    //For excess loading//
   std::vector<std::vector<double2>>ExcessLoading; //Average excess loadings for adsorbates//

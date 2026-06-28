@@ -451,6 +451,22 @@ void GatherStatisticsDuringSimulation(Variables& Vars, size_t systemId, size_t c
     }
     Gather_Averages_Types(SystemComponents.VolumeAverage, Sims.Box.Volume, 0.0, i, BlockAverageSize, SystemComponents.Nblock);
     Gather_Averages_MoveEnergy(SystemComponents, i, BlockAverageSize, SystemComponents.deltaE);
+
+    //=== Accumulate the 3D adsorbate-density grid (RASPA2 ComputeDensityProfile3DVTKGrid parity) ===//
+    if(SystemComponents.ComputeDensityGrid && i % SystemComponents.DensityGridSampleEvery == 0)
+    {
+      Boxsize& HostBox = Vars.Box[systemId];
+      Atoms device_System[SystemComponents.NComponents.x];
+      Copy_AtomData_from_Device(device_System, Sims.d_a, SystemComponents, HostBox, Sims);
+      Accumulate_DensityGrid(SystemComponents, HostBox);
+    }
+    //Optional periodic flush of the grid to disk (also always flushed at end of production)//
+    if(SystemComponents.ComputeDensityGrid && i > 0 && i % SystemComponents.DensityGridWriteEvery == 0)
+    {
+      Boxsize& HostBox = Vars.Box[systemId];
+      HostBox.Volume = Sims.Box.Volume;
+      WriteDensityGrid(SystemComponents, HostBox, systemId);
+    }
   }
   if(SimulationMode != INITIALIZATION && i > 0)
   {
@@ -564,6 +580,15 @@ inline void MCEndOfPhaseSummary(Variables& Vars)
       PrintAllStatistics(SystemComponents[sim], Sims[sim], Cycles, Vars.SimulationMode, Vars.BlockAverageSize, Constants);
       if(Vars.SimulationMode == PRODUCTION)
         Calculate_Overall_Averages_MoveEnergy(SystemComponents[sim], Vars.BlockAverageSize, Cycles);
+      //=== Flush the 3D adsorbate-density grid at the end of the production phase ===//
+      if(Vars.SimulationMode == PRODUCTION && SystemComponents[sim].ComputeDensityGrid)
+      {
+        Boxsize& HostBox = Vars.Box[sim];
+        Atoms device_System[SystemComponents[sim].NComponents.x];
+        Copy_AtomData_from_Device(device_System, Sims[sim].d_a, SystemComponents[sim], HostBox, Sims[sim]);
+        HostBox.Volume = Sims[sim].Box.Volume;
+        WriteDensityGrid(SystemComponents[sim], HostBox, sim);
+      }
     }
     PrintSystemMoves(Vars);
   }
