@@ -1327,7 +1327,7 @@ void read_movies_stats_print(Components& SystemComponents, size_t sim)
   }
   //printf("Writing Movies every %zu MC step(s) or cycle(s)\n", SystemComponents.MoviesEvery);
   //printf("Printing Loadings and energies every %zu MC step(s) or cycle(s)\n", SystemComponents.PrintStatsEvery);
-  if(SystemComponents.OUTPUT != stderr) //printf("Saving Output to File!\n");
+  if(SystemComponents.OUTPUT != stderr) {} //printf("Saving Output to File!\n");
   //One-line banner mirroring RASPA2's "3D density grid for adsorbates: yes|no"//
   if(SystemComponents.ComputeDensityGrid)
     fprintf(SystemComponents.OUTPUT, "3D density grid for adsorbates: yes (%d x %d x %d, sampled every %zu cycle(s), written every %zu cycle(s))\n",
