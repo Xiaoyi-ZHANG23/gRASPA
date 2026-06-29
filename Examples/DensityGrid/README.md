@@ -30,3 +30,11 @@ of CO2 reproduces the "# MOLECULES" block average printed in the output. See
 
 A vetted reference `output.txt` (build noted at the top of the file) is shipped for the
 A/B `score.py` gate.
+
+## Reference build
+
+The shipped `output.txt` was produced by the vanilla (non-ML) build at commit `bdcb953`
+(branch `feature/density-grid-3d`, off `main` `3fc256d`) on a Quest A100. Validated:
+integral over the cell = 57.197 atoms = 19.06567 CO2 molecules, matching the reported
+`# MOLECULES` block average to 0.00%. The first line of `output.txt` is the absolute
+exe-path banner (machine-specific) — drop it when byte-matching the shipped format.
