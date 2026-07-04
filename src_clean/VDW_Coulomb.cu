@@ -1667,3 +1667,530 @@ __global__ void REZERO_VALS(double* vals, size_t size)
 {
   for(size_t i = 0; i < size; i++) vals[i] = 0.0;
 }
+
+//################################################################################################//
+//   Precomputed framework ENERGY GRID over one unit cell (RASPA2 MakeGrid/MakeASCIGrid parity)   //
+//                                                                                                //
+//   Computed ONCE before any MC cycle (hooked in main.cpp after the INITIAL energy check, when   //
+//   the box holds only the framework, atoms are on the device, and the Ewald framework           //
+//   structure factors have just been built by Check_Simulation_Energy/Allocate_Copy_Ewald_Vector)//
+//                                                                                                //
+//   Grid geometry follows RASPA2 grids.c:462-498 exactly:                                        //
+//     - rectangular box enclosing ONE unit cell: Size = (|ax|+|bx|+|cx|, ...), negative          //
+//       components accumulate into Shift;                                                        //
+//     - N = (int)(Size/Spacing), bumped to odd; Delta = Size/N; N+1 inclusive planes per axis;   //
+//     - point (i,j,k) at pos = Shift + (i,j,k)*Delta; loop order i->j->k (z innermost);          //
+//     - energies evaluated with minimum-image over the FULL supercell (PBC), like RASPA2.        //
+//                                                                                                //
+//   Per VDW probe type (RASPA2 "GridTypes"): U = sum over framework atoms of VDW(probe,atom)     //
+//   within CutOffVDW, plus the analytic gradient (RASPA2 CalculateDerivativesAtPositionVDW).     //
+//   Coulomb grid (unit +1e probe, RASPA2 CalculateDerivativesAtPositionReal):                    //
+//     E_real  = Prefactor * q_B * erfc(Alpha*r)/r within CutOffCoul  (what RASPA2 tabulates)     //
+//     E_recip = sum_k 2*factor(k)*exp(-k^2/4a^2)/k^2 * Re[S_frame(k) * conj(e^{ik.r})]           //
+//               (the framework<->probe reciprocal-space cross term RASPA2 adds at run time;      //
+//                stored here as an extra column so E_total = E_real + E_recip is the complete,   //
+//                alpha-independent Ewald electrostatic energy of the probe)                      //
+//                                                                                                //
+//   ASCII output mirrors RASPA2 MakeASCIGrid (7 columns "x y z E Fx Fy Fz" in Kelvin, "?" for    //
+//   capped points, EnergyOverlapCriteria semantics); a Gaussian .cube (values in Kelvin, capped  //
+//   points stored as 2*criteria like RASPA2 MakeGrid) is written for visualization.              //
+//################################################################################################//
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <algorithm>
+
+//Block-per-grid-point kernel: threads stride over framework atoms, shared-memory reduction.//
+//Writes the VDW energy (internal units) and its gradient dU/dx,y,z for probe type `probeType`.//
+__global__ void EnergyGrid_Framework_VDW(Boxsize Box, Atoms* System, ForceField FF, int3 NComps, size_t probeType,
+                                         double3 ShiftGrid, double3 DeltaGrid, int3 NPoints,
+                                         size_t PointOffset, size_t NPointsInBatch,
+                                         double* outE, double3* outGrad)
+{
+  extern __shared__ double sdata[]; //4 doubles per thread: E, gx, gy, gz//
+  if(blockIdx.x >= NPointsInBatch) return;
+  const size_t gpoint = blockIdx.x + PointOffset;
+  //unpack (i,j,k) with N+1 inclusive planes per axis; flat = (i*(Ny+1) + j)*(Nz+1) + k//
+  const size_t nyp = (size_t)NPoints.y + 1;
+  const size_t nzp = (size_t)NPoints.z + 1;
+  const size_t k  = gpoint % nzp;
+  const size_t ij = gpoint / nzp;
+  const size_t j  = ij % nyp;
+  const size_t i  = ij / nyp;
+  const double3 pos = {ShiftGrid.x + (double)i * DeltaGrid.x,
+                       ShiftGrid.y + (double)j * DeltaGrid.y,
+                       ShiftGrid.z + (double)k * DeltaGrid.z};
+
+  double E = 0.0; double3 G = {0.0, 0.0, 0.0};
+  for(size_t comp = 0; comp < NComps.y; comp++) //framework components only//
+  {
+    const size_t Natom = System[comp].size;
+    for(size_t a = threadIdx.x; a < Natom; a += blockDim.x)
+    {
+      double3 posvec = pos - System[comp].pos[a];
+      PBC(posvec, Box.Cell, Box.InverseCell, Box.Cubic);
+      const double rr_dot = dot(posvec, posvec);
+      if(rr_dot < FF.CutOffVDW)
+      {
+        const size_t typeB   = System[comp].Type[a];
+        const double scaling = System[comp].scale[a]; //probe scale = 1//
+        const size_t row     = probeType * FF.size + typeB;
+        const double FFarg[5] = {FF.epsilon[row], FF.sigma[row], FF.z[row], FF.shift[row], FF.C10[row]};
+        double result[2] = {0.0, 0.0};
+        VDW(FFarg, rr_dot, scaling, result, FF.Use1264);
+        E += result[0];
+        //analytic DF = (1/r)(dU/dr), so gradient dU/dx = DF*dx (RASPA2 potentials.c:10992 for LJ)//
+        double DF = 0.0;
+        if(FF.Use1264)
+        {
+          //U = C12/r^12 - C6/r^6 + C10/r^10 + C4/r^4 - shift; FFarg = {C12, C6, C4, shift, C10}//
+          const double ri2  = 1.0 / rr_dot;
+          const double ri4  = ri2 * ri2;
+          const double ri6  = ri4 * ri2;
+          const double ri8  = ri4 * ri4;
+          const double ri12 = ri6 * ri6;
+          const double ri14 = ri12 * ri2;
+          DF = scaling * (-12.0 * FFarg[0] * ri14 + 6.0 * FFarg[1] * ri8
+                          -10.0 * FFarg[4] * ri12 - 4.0 * FFarg[2] * ri6);
+        }
+        else
+        {
+          const double arg2  = FFarg[1] * FFarg[1];
+          const double temp  = rr_dot / arg2;
+          const double temp3 = temp * temp * temp;
+          const double rri3  = 1.0 / (temp3 + 0.5 * (1.0 - scaling) * (1.0 - scaling));
+          DF = scaling * 24.0 * FFarg[0] * (rri3 * (1.0 - 2.0 * rri3)) / rr_dot;
+        }
+        G.x += posvec.x * DF; G.y += posvec.y * DF; G.z += posvec.z * DF;
+      }
+    }
+  }
+  sdata[threadIdx.x]                  = E;
+  sdata[threadIdx.x +     blockDim.x] = G.x;
+  sdata[threadIdx.x + 2 * blockDim.x] = G.y;
+  sdata[threadIdx.x + 3 * blockDim.x] = G.z;
+  __syncthreads();
+  int i_red = blockDim.x / 2;
+  while(i_red != 0)
+  {
+    if(threadIdx.x < i_red)
+    {
+      sdata[threadIdx.x]                  += sdata[threadIdx.x + i_red];
+      sdata[threadIdx.x +     blockDim.x] += sdata[threadIdx.x + i_red +     blockDim.x];
+      sdata[threadIdx.x + 2 * blockDim.x] += sdata[threadIdx.x + i_red + 2 * blockDim.x];
+      sdata[threadIdx.x + 3 * blockDim.x] += sdata[threadIdx.x + i_red + 3 * blockDim.x];
+    }
+    __syncthreads();
+    i_red /= 2;
+  }
+  if(threadIdx.x == 0)
+  {
+    outE[blockIdx.x]    = sdata[0];
+    outGrad[blockIdx.x] = {sdata[blockDim.x], sdata[2 * blockDim.x], sdata[3 * blockDim.x]};
+  }
+}
+
+//Real-space (erfc-screened) Ewald part for a UNIT (+1e) probe charge, plus the smallest//
+//probe-framework distance (RASPA2 caps the Coulomb grid when smallest_r < 1 Angstrom).//
+__global__ void EnergyGrid_Framework_CoulReal(Boxsize Box, Atoms* System, ForceField FF, int3 NComps,
+                                              double3 ShiftGrid, double3 DeltaGrid, int3 NPoints,
+                                              size_t PointOffset, size_t NPointsInBatch,
+                                              double* outE, double* outMinR)
+{
+  extern __shared__ double sdata[]; //2 doubles per thread: E, minR//
+  if(blockIdx.x >= NPointsInBatch) return;
+  const size_t gpoint = blockIdx.x + PointOffset;
+  const size_t nyp = (size_t)NPoints.y + 1;
+  const size_t nzp = (size_t)NPoints.z + 1;
+  const size_t k  = gpoint % nzp;
+  const size_t ij = gpoint / nzp;
+  const size_t j  = ij % nyp;
+  const size_t i  = ij / nyp;
+  const double3 pos = {ShiftGrid.x + (double)i * DeltaGrid.x,
+                       ShiftGrid.y + (double)j * DeltaGrid.y,
+                       ShiftGrid.z + (double)k * DeltaGrid.z};
+
+  double E = 0.0; double minR = 1.0e30;
+  for(size_t comp = 0; comp < NComps.y; comp++)
+  {
+    const size_t Natom = System[comp].size;
+    for(size_t a = threadIdx.x; a < Natom; a += blockDim.x)
+    {
+      double3 posvec = pos - System[comp].pos[a];
+      PBC(posvec, Box.Cell, Box.InverseCell, Box.Cubic);
+      const double rr_dot = dot(posvec, posvec);
+      if(rr_dot < FF.CutOffCoul)
+      {
+        const double r = std::sqrt(rr_dot);
+        if(r < minR) minR = r;
+        double resultCoul[2] = {0.0, 0.0};
+        CoulombReal(1.0, System[comp].charge[a], r, System[comp].scaleCoul[a], resultCoul, Box.Prefactor, Box.Alpha);
+        E += resultCoul[0];
+      }
+    }
+  }
+  sdata[threadIdx.x]              = E;
+  sdata[threadIdx.x + blockDim.x] = minR;
+  __syncthreads();
+  int i_red = blockDim.x / 2;
+  while(i_red != 0)
+  {
+    if(threadIdx.x < i_red)
+    {
+      sdata[threadIdx.x] += sdata[threadIdx.x + i_red];
+      if(sdata[threadIdx.x + i_red + blockDim.x] < sdata[threadIdx.x + blockDim.x])
+        sdata[threadIdx.x + blockDim.x] = sdata[threadIdx.x + i_red + blockDim.x];
+    }
+    __syncthreads();
+    i_red /= 2;
+  }
+  if(threadIdx.x == 0)
+  {
+    outE[blockIdx.x]    = sdata[0];
+    outMinR[blockIdx.x] = sdata[blockDim.x];
+  }
+}
+
+//Reciprocal-space framework<->probe cross term for a UNIT (+1e) probe at each grid point.//
+//Same k-vector packing, gating and prefactors as TotalFourierEwald_CalculateEnergy          //
+//(Ewald_Energy_Functions.h): kx in [0,kmax.x], ky/kz in [-kmax,+kmax], factor doubled for   //
+//kx>0, gate (ksqr>1e-10 && ksqr<ReciprocalCutOff) with the LAMMPS-Ewald ksqr override.      //
+__global__ void EnergyGrid_Framework_Fourier(Boxsize Box, Complex* FrameworkEik,
+                                             double3 ShiftGrid, double3 DeltaGrid, int3 NPoints,
+                                             size_t PointOffset, size_t NPointsInBatch, size_t kpoints,
+                                             double* outE)
+{
+  extern __shared__ double sdata[]; //1 double per thread//
+  if(blockIdx.x >= NPointsInBatch) return;
+  const size_t gpoint = blockIdx.x + PointOffset;
+  const size_t nyp = (size_t)NPoints.y + 1;
+  const size_t nzp = (size_t)NPoints.z + 1;
+  const size_t k  = gpoint % nzp;
+  const size_t ij = gpoint / nzp;
+  const size_t j  = ij % nyp;
+  const size_t i  = ij / nyp;
+  const double3 pos = {ShiftGrid.x + (double)i * DeltaGrid.x,
+                       ShiftGrid.y + (double)j * DeltaGrid.y,
+                       ShiftGrid.z + (double)k * DeltaGrid.z};
+
+  const double alpha = Box.Alpha; const double alpha_squared = alpha * alpha;
+  const double prefactor = Box.Prefactor * (2.0 * M_PI / Box.Volume);
+  const size_t ky_max = Box.kmax.y;
+  const size_t kz_max = Box.kmax.z;
+  const double3 ax = {Box.InverseCell[0], Box.InverseCell[3], Box.InverseCell[6]};
+  const double3 ay = {Box.InverseCell[1], Box.InverseCell[4], Box.InverseCell[7]};
+  const double3 az = {Box.InverseCell[2], Box.InverseCell[5], Box.InverseCell[8]};
+
+  double E = 0.0;
+  for(size_t kxyz = threadIdx.x; kxyz < kpoints; kxyz += blockDim.x)
+  {
+    int kz = kxyz%(2 * kz_max + 1) - kz_max;
+    int kxy= kxyz/(2 * kz_max + 1);
+    int kx = kxy /(2 * ky_max + 1);
+    int ky = kxy %(2 * ky_max + 1) - ky_max;
+    double ksqr = static_cast<double>(kx * kx + ky * ky + kz * kz);
+
+    double3 kvec_x = ax * 2.0 * M_PI * (double) kx;
+    double3 kvec_y = ay * 2.0 * M_PI * (double) ky;
+    double3 kvec_z = az * 2.0 * M_PI * (double) kz;
+    const double factor = (kx == 0) ? (1.0 * prefactor) : (2.0 * prefactor);
+    double3 tempkvec = kvec_x + kvec_y + kvec_z;
+    const double rksq = dot(tempkvec, tempkvec);
+
+    if(Box.UseLAMMPSEwald) //Overwrite ksqr if we use the LAMMPS Setup for Ewald//
+    {
+      const double lx = Box.Cell[0];
+      const double ly = Box.Cell[4];
+      const double lz = Box.Cell[8];
+      const double xy = Box.Cell[3];
+      const double xz = Box.Cell[6];
+      const double yz = Box.Cell[7];
+      const double ux = 2*M_PI/lx;
+      const double uy = 2*M_PI*(-xy)/lx/ly;
+      const double uz = 2*M_PI*(xy*yz - ly*xz)/lx/ly/lz;
+      const double vy = 2*M_PI/ly;
+      const double vz = 2*M_PI*(-yz)/ly/lz;
+      const double wz = 2*M_PI/lz;
+      const double kvecx = kx*ux;
+      const double kvecy = kx*uy + ky*vy;
+      const double kvecz = kx*uz + ky*vz + kz*wz;
+      ksqr  = kvecx*kvecx + kvecy*kvecy + kvecz*kvecz;
+    }
+
+    if((ksqr > 1e-10) && (ksqr < Box.ReciprocalCutOff))
+    {
+      const double temp  = factor * std::exp((-0.25 / alpha_squared) * rksq) / rksq;
+      const double phase = dot(tempkvec, pos); //= 2*pi*(kx*sx + ky*sy + kz*sz), matches eik convention//
+      const double cosp  = std::cos(phase);
+      const double sinp  = std::sin(phase);
+      //probe structure factor e^{+ik.r}, charge +1; cross energy = 2*temp*Re[S_frame * conj(e_probe)]//
+      E += temp * 2.0 * (FrameworkEik[kxyz].real * cosp + FrameworkEik[kxyz].imag * sinp);
+    }
+  }
+  sdata[threadIdx.x] = E;
+  __syncthreads();
+  int i_red = blockDim.x / 2;
+  while(i_red != 0)
+  {
+    if(threadIdx.x < i_red) sdata[threadIdx.x] += sdata[threadIdx.x + i_red];
+    __syncthreads();
+    i_red /= 2;
+  }
+  if(threadIdx.x == 0) outE[blockIdx.x] = sdata[0];
+}
+
+//RASPA2 grids.c:487-498 dimensioning: truncate, bump to odd, Delta = Size/N (N+1 inclusive planes).//
+static void EnergyGrid_Dimension(double size, double spacing, int& N, double& delta)
+{
+  N = (int)(size / spacing);
+  if(N % 2 == 0) N++;
+  if(N < 1) N = 1;
+  delta = size / (double)N;
+}
+
+//Gaussian .cube writer for one scalar grid (values in Kelvin). The grid is a rectangular//
+//Cartesian lattice (RASPA2 enclosing box), so voxel vectors are diagonal = Delta.        //
+static void EnergyGrid_WriteCube(const std::string& filename, const std::string& title, const std::string& subtitle,
+                                 int3 NPoints, double3 ShiftGrid, double3 DeltaGrid, const std::vector<double>& E_Kelvin)
+{
+  const double ANG_TO_BOHR = 1.8897259885789;
+  std::ofstream f(filename, std::ios::out);
+  f << title << "\n" << subtitle << "\n";
+  f << std::fixed << std::setprecision(6);
+  f << "    1    " << ShiftGrid.x * ANG_TO_BOHR << "    " << ShiftGrid.y * ANG_TO_BOHR << "    " << ShiftGrid.z * ANG_TO_BOHR << "\n";
+  f << std::scientific << std::setprecision(6);
+  f << (NPoints.x + 1) << " " << DeltaGrid.x * ANG_TO_BOHR << " 0.0 0.0\n";
+  f << (NPoints.y + 1) << " 0.0 " << DeltaGrid.y * ANG_TO_BOHR << " 0.0\n";
+  f << (NPoints.z + 1) << " 0.0 0.0 " << DeltaGrid.z * ANG_TO_BOHR << "\n";
+  f << "    1    1.000000    0.000000    0.000000    0.000000\n"; //marker atom at grid origin//
+  const size_t nyp = (size_t)NPoints.y + 1;
+  const size_t nzp = (size_t)NPoints.z + 1;
+  for(int i = 0; i <= NPoints.x; i++)
+    for(int j = 0; j <= NPoints.y; j++)
+    {
+      int col = 0;
+      for(int k = 0; k <= NPoints.z; k++)
+      {
+        f << " " << std::setw(13) << E_Kelvin[((size_t)i * nyp + (size_t)j) * nzp + (size_t)k];
+        if(++col % 6 == 0) f << "\n";
+      }
+      if(col % 6 != 0) f << "\n";
+    }
+  f.close();
+}
+
+//Host driver: called once per system from main.cpp, right after the INITIAL energy check//
+//(box holds only the framework; Ewald framework structure factors are on the device).   //
+void Compute_EnergyGrid(Variables& Vars, size_t systemId)
+{
+  Components&  SystemComponents = Vars.SystemComponents[systemId];
+  Simulations& Sims             = Vars.Sims[systemId];
+  ForceField&  FF               = Vars.device_FF; //device pointers; scalars identical to host copy//
+  Boxsize&     HostBox          = Vars.Box[systemId];
+  FILE*        OUT              = SystemComponents.OUTPUT;
+  const double ENERGY_TO_KELVIN = Vars.Constants.energy_to_kelvin;
+  const double CAP              = SystemComponents.EnergyGridOverlapCriteria; //internal units, RASPA2 EnergyOverlapCriteria parity//
+
+  fprintf(OUT, "\n================= FRAMEWORK ENERGY GRID (RASPA2 MakeGrid parity) =================\n");
+
+  //--- Enclosing box of ONE unit cell (RASPA2 grids.c:462-485). Cell rows are the SUPERCELL a,b,c. ---//
+  int3 NUC = SystemComponents.NumberofUnitCells;
+  if(NUC.x < 1) NUC.x = 1; if(NUC.y < 1) NUC.y = 1; if(NUC.z < 1) NUC.z = 1;
+  const double* C = HostBox.Cell;
+  const double UC[9] = {C[0] / NUC.x, C[1] / NUC.x, C[2] / NUC.x,   //unit-cell a-vector//
+                        C[3] / NUC.y, C[4] / NUC.y, C[5] / NUC.y,   //unit-cell b-vector//
+                        C[6] / NUC.z, C[7] / NUC.z, C[8] / NUC.z};  //unit-cell c-vector//
+  double3 SizeGrid  = {0.0, 0.0, 0.0};
+  double3 ShiftGrid = {0.0, 0.0, 0.0};
+  for(int v = 0; v < 3; v++)
+  {
+    SizeGrid.x += std::fabs(UC[v * 3 + 0]); if(UC[v * 3 + 0] < 0.0) ShiftGrid.x += UC[v * 3 + 0];
+    SizeGrid.y += std::fabs(UC[v * 3 + 1]); if(UC[v * 3 + 1] < 0.0) ShiftGrid.y += UC[v * 3 + 1];
+    SizeGrid.z += std::fabs(UC[v * 3 + 2]); if(UC[v * 3 + 2] < 0.0) ShiftGrid.z += UC[v * 3 + 2];
+  }
+
+  //--- Cutoff sanity check (RASPA2 grids.c:443): perpendicular widths of the SUPERCELL vs CutOffVDW ---//
+  {
+    const double3 av = {C[0], C[1], C[2]}, bv = {C[3], C[4], C[5]}, cv = {C[6], C[7], C[8]};
+    const double3 bxc = {bv.y * cv.z - bv.z * cv.y, bv.z * cv.x - bv.x * cv.z, bv.x * cv.y - bv.y * cv.x};
+    const double3 cxa = {cv.y * av.z - cv.z * av.y, cv.z * av.x - cv.x * av.z, cv.x * av.y - cv.y * av.x};
+    const double3 axb = {av.y * bv.z - av.z * bv.y, av.z * bv.x - av.x * bv.z, av.x * bv.y - av.y * bv.x};
+    const double V = std::fabs(HostBox.Volume);
+    const double wa = V / std::sqrt(dot(bxc, bxc)), wb = V / std::sqrt(dot(cxa, cxa)), wc = V / std::sqrt(dot(axb, axb));
+    const double minwidth = std::min(std::min(wa, wb), wc);
+    if(minwidth < 2.0 * std::sqrt(FF.CutOffVDW)) //FF.CutOffVDW is stored squared//
+      fprintf(OUT, "WARNING: EnergyGrid: smallest perpendicular boxlength (%f) < 2*CutOffVDW (%f); minimum-image energies will differ from RASPA2 run with more unit cells!\n",
+              minwidth, 2.0 * std::sqrt(FF.CutOffVDW));
+  }
+
+  //--- Grid dimensioning (RASPA2 grids.c:487-498 / 604-615) ---//
+  int3 NV; double3 DV;
+  EnergyGrid_Dimension(SizeGrid.x, SystemComponents.EnergyGridSpacingVDW, NV.x, DV.x);
+  EnergyGrid_Dimension(SizeGrid.y, SystemComponents.EnergyGridSpacingVDW, NV.y, DV.y);
+  EnergyGrid_Dimension(SizeGrid.z, SystemComponents.EnergyGridSpacingVDW, NV.z, DV.z);
+  int3 NC; double3 DC;
+  EnergyGrid_Dimension(SizeGrid.x, SystemComponents.EnergyGridSpacingCoulomb, NC.x, DC.x);
+  EnergyGrid_Dimension(SizeGrid.y, SystemComponents.EnergyGridSpacingCoulomb, NC.y, DC.y);
+  EnergyGrid_Dimension(SizeGrid.z, SystemComponents.EnergyGridSpacingCoulomb, NC.z, DC.z);
+  fprintf(OUT, "SizeGrid: %g %g %g, ShiftGrid: %g %g %g (one unit cell; %d x %d x %d cells in the supercell)\n",
+          SizeGrid.x, SizeGrid.y, SizeGrid.z, ShiftGrid.x, ShiftGrid.y, ShiftGrid.z, NUC.x, NUC.y, NUC.z);
+  fprintf(OUT, "VDW grid points: %d x %d x %d (odd, N+1 planes inclusive), Coulomb grid points: %d x %d x %d\n",
+          NV.x, NV.y, NV.z, NC.x, NC.y, NC.z);
+
+  //--- Resolve probe pseudo-atom names (RASPA2 GridTypes) against pseudo_atoms.def ---//
+  std::vector<std::pair<std::string, size_t>> Probes;
+  for(size_t n = 0; n < SystemComponents.EnergyGridTypes.size(); n++)
+  {
+    const std::string& want = SystemComponents.EnergyGridTypes[n];
+    bool found = false;
+    for(size_t t = 0; t < SystemComponents.PseudoAtoms.Name.size(); t++)
+      if(SystemComponents.PseudoAtoms.Name[t] == want) { Probes.push_back({want, t}); found = true; break; }
+    if(!found)
+      fprintf(OUT, "WARNING: EnergyGrid: GridTypes name [%s] not found in pseudo_atoms.def, skipping this grid!\n", want.c_str());
+  }
+  if(Probes.empty())
+    fprintf(OUT, "EnergyGrid: no valid GridTypes given: skipping VDW grids (Coulomb grid still made if charges are on)\n");
+
+  std::string dirname = "EnergyGrid/System_" + std::to_string(systemId) + "/";
+  std::filesystem::path cwd = std::filesystem::current_path();
+  std::filesystem::create_directories(cwd / dirname);
+
+  const size_t Nthread  = 128;
+  const size_t MaxBatch = (size_t)1 << 21; //grid points per kernel launch (bounds device memory)//
+
+  //================================ VDW grids (one per probe type) ================================//
+  const size_t NPointsVDW = ((size_t)NV.x + 1) * ((size_t)NV.y + 1) * ((size_t)NV.z + 1);
+  if(!Probes.empty())
+  {
+    double*  d_E;    cudaMalloc(&d_E,    std::min(MaxBatch, NPointsVDW) * sizeof(double));
+    double3* d_Grad; cudaMalloc(&d_Grad, std::min(MaxBatch, NPointsVDW) * sizeof(double3));
+    for(size_t p = 0; p < Probes.size(); p++)
+    {
+      const double start = omp_get_wtime();
+      std::vector<double>  E(NPointsVDW);
+      std::vector<double3> Grad(NPointsVDW);
+      for(size_t offset = 0; offset < NPointsVDW; offset += MaxBatch)
+      {
+        const size_t batch = std::min(MaxBatch, NPointsVDW - offset);
+        EnergyGrid_Framework_VDW<<<batch, Nthread, 4 * Nthread * sizeof(double)>>>(Sims.Box, Sims.d_a, FF, SystemComponents.NComponents, Probes[p].second, ShiftGrid, DV, NV, offset, batch, d_E, d_Grad);
+        checkCUDAErrorVDW("error in EnergyGrid_Framework_VDW kernel");
+        cudaMemcpy(E.data()    + offset, d_E,    batch * sizeof(double),  cudaMemcpyDeviceToHost);
+        cudaMemcpy(Grad.data() + offset, d_Grad, batch * sizeof(double3), cudaMemcpyDeviceToHost);
+      }
+      //ASCII, RASPA2 MakeASCIGrid parity: "x y z E Fx Fy Fz" (Kelvin, force = -gradient), "?" if E >= criteria//
+      const std::string base = dirname + "EnergyGrid_VDW_" + Probes[p].first;
+      FILE* fgrid = fopen((cwd / (base + ".grid")).c_str(), "w");
+      if(fgrid == nullptr)
+      {
+        fprintf(OUT, "WARNING: EnergyGrid: could not open %s.grid for writing, skipping this grid\n", base.c_str());
+        continue;
+      }
+      std::vector<double> E_K(NPointsVDW); //for the .cube: capped points stored as 2*criteria (RASPA2 MakeGrid parity)//
+      size_t ncapped = 0;
+      size_t flat = 0;
+      for(int i = 0; i <= NV.x; i++)
+        for(int j = 0; j <= NV.y; j++)
+          for(int k = 0; k <= NV.z; k++, flat++)
+          {
+            const double px = ShiftGrid.x + (double)i * DV.x;
+            const double py = ShiftGrid.y + (double)j * DV.y;
+            const double pz = ShiftGrid.z + (double)k * DV.z;
+            if(E[flat] < CAP)
+            {
+              fprintf(fgrid, "%g %g %g %g %g %g %g\n", px, py, pz, E[flat] * ENERGY_TO_KELVIN,
+                      -Grad[flat].x * ENERGY_TO_KELVIN, -Grad[flat].y * ENERGY_TO_KELVIN, -Grad[flat].z * ENERGY_TO_KELVIN);
+              E_K[flat] = E[flat] * ENERGY_TO_KELVIN;
+            }
+            else
+            {
+              fprintf(fgrid, "%g %g %g %s %s %s %s\n", px, py, pz, "?", "?", "?", "?");
+              E_K[flat] = 2.0 * CAP * ENERGY_TO_KELVIN;
+              ncapped++;
+            }
+          }
+      fclose(fgrid);
+      EnergyGrid_WriteCube((cwd / (base + ".cube")).string(),
+                           "gRASPA framework VDW energy grid (RASPA2 MakeGrid parity), values in Kelvin",
+                           "Probe pseudo-atom " + Probes[p].first + "; capped points stored as 2*EnergyOverlapCriteria",
+                           NV, ShiftGrid, DV, E_K);
+      fprintf(OUT, "EnergyGrid: VDW grid [%s] (%zu points, %zu capped) written to %s.grid/.cube, took %.5f secs\n",
+              Probes[p].first.c_str(), NPointsVDW, ncapped, base.c_str(), omp_get_wtime() - start);
+    }
+    cudaFree(d_E); cudaFree(d_Grad);
+  }
+
+  //====================== Coulomb grid (unit +1e probe, Ewald real + reciprocal) ======================//
+  if(!FF.noCharges)
+  {
+    const size_t NPointsCoul = ((size_t)NC.x + 1) * ((size_t)NC.y + 1) * ((size_t)NC.z + 1);
+    const size_t kpoints = ((size_t)Sims.Box.kmax.x + 1) * (2 * (size_t)Sims.Box.kmax.y + 1) * (2 * (size_t)Sims.Box.kmax.z + 1);
+    const bool HaveEik = (Sims.Box.FrameworkEik != nullptr) && (SystemComponents.FrameworkEik.size() > 0);
+    if(!HaveEik)
+      fprintf(OUT, "WARNING: EnergyGrid: framework structure factors unavailable, reciprocal column will be zero!\n");
+
+    const double start = omp_get_wtime();
+    std::vector<double> Ereal(NPointsCoul), Erecip(NPointsCoul, 0.0), MinR(NPointsCoul);
+    double* d_E;    cudaMalloc(&d_E,    std::min(MaxBatch, NPointsCoul) * sizeof(double));
+    double* d_MinR; cudaMalloc(&d_MinR, std::min(MaxBatch, NPointsCoul) * sizeof(double));
+    double* d_Four; cudaMalloc(&d_Four, std::min(MaxBatch, NPointsCoul) * sizeof(double));
+    for(size_t offset = 0; offset < NPointsCoul; offset += MaxBatch)
+    {
+      const size_t batch = std::min(MaxBatch, NPointsCoul - offset);
+      EnergyGrid_Framework_CoulReal<<<batch, Nthread, 2 * Nthread * sizeof(double)>>>(Sims.Box, Sims.d_a, FF, SystemComponents.NComponents, ShiftGrid, DC, NC, offset, batch, d_E, d_MinR);
+      checkCUDAErrorVDW("error in EnergyGrid_Framework_CoulReal kernel");
+      cudaMemcpy(Ereal.data() + offset, d_E,    batch * sizeof(double), cudaMemcpyDeviceToHost);
+      cudaMemcpy(MinR.data()  + offset, d_MinR, batch * sizeof(double), cudaMemcpyDeviceToHost);
+      if(HaveEik)
+      {
+        EnergyGrid_Framework_Fourier<<<batch, Nthread, Nthread * sizeof(double)>>>(Sims.Box, Sims.Box.FrameworkEik, ShiftGrid, DC, NC, offset, batch, kpoints, d_Four);
+        checkCUDAErrorVDW("error in EnergyGrid_Framework_Fourier kernel");
+        cudaMemcpy(Erecip.data() + offset, d_Four, batch * sizeof(double), cudaMemcpyDeviceToHost);
+      }
+    }
+    cudaFree(d_E); cudaFree(d_MinR); cudaFree(d_Four);
+
+    //ASCII: "x y z E_total E_real E_recip" (Kelvin, unit +1e probe).                              //
+    //E_real is exactly what RASPA2 MakeGrid tabulates (CalculateDerivativesAtPositionReal);       //
+    //cap rule is RASPA2's (E_real > criteria OR smallest_r < 1 Angstrom -> "?").                  //
+    const std::string base = dirname + "EnergyGrid_Coulomb_Ewald";
+    FILE* fgrid = fopen((cwd / (base + ".grid")).c_str(), "w");
+    if(fgrid == nullptr)
+      fprintf(OUT, "WARNING: EnergyGrid: could not open %s.grid for writing, only the .cube will be produced\n", base.c_str());
+    std::vector<double> E_K(NPointsCoul);
+    size_t ncapped = 0;
+    size_t flat = 0;
+    for(int i = 0; i <= NC.x; i++)
+      for(int j = 0; j <= NC.y; j++)
+        for(int k = 0; k <= NC.z; k++, flat++)
+        {
+          const double px = ShiftGrid.x + (double)i * DC.x;
+          const double py = ShiftGrid.y + (double)j * DC.y;
+          const double pz = ShiftGrid.z + (double)k * DC.z;
+          if(Ereal[flat] > CAP || MinR[flat] < 1.0)
+          {
+            if(fgrid) fprintf(fgrid, "%g %g %g %s %s %s\n", px, py, pz, "?", "?", "?");
+            E_K[flat] = 2.0 * CAP * ENERGY_TO_KELVIN;
+            ncapped++;
+          }
+          else
+          {
+            const double Etot = Ereal[flat] + Erecip[flat];
+            if(fgrid) fprintf(fgrid, "%g %g %g %g %g %g\n", px, py, pz, Etot * ENERGY_TO_KELVIN,
+                    Ereal[flat] * ENERGY_TO_KELVIN, Erecip[flat] * ENERGY_TO_KELVIN);
+            E_K[flat] = Etot * ENERGY_TO_KELVIN;
+          }
+        }
+    if(fgrid) fclose(fgrid);
+    EnergyGrid_WriteCube((cwd / (base + ".cube")).string(),
+                         "gRASPA framework Coulomb (Ewald real+reciprocal) energy grid for a unit +1e probe, values in Kelvin",
+                         "E_total = E_real(erfc) + E_recip(framework structure factors); capped points stored as 2*EnergyOverlapCriteria",
+                         NC, ShiftGrid, DC, E_K);
+    fprintf(OUT, "EnergyGrid: Coulomb (Ewald) grid (%zu points, %zu capped, %zu k-vectors) written to %s.grid/.cube, took %.5f secs\n",
+            NPointsCoul, ncapped, kpoints, base.c_str(), omp_get_wtime() - start);
+  }
+  else
+  {
+    fprintf(OUT, "EnergyGrid: system has no charges (noCharges), skipping the Coulomb (Ewald) grid\n");
+  }
+  fprintf(OUT, "=============== END OF FRAMEWORK ENERGY GRID (RASPA2 MakeGrid parity) ==============\n\n");
+}

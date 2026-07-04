@@ -332,6 +332,11 @@ Variables Initialize(void) //for pybind
     // Calculate & Initialize Ewald for the Initial state of the box //
     ///////////////////////////////////////////////////////////////////
     Check_Simulation_Energy(Vars.Box[a], Vars.SystemComponents[a].HostSystem, Vars.FF, Vars.device_FF, Vars.SystemComponents[a], INITIAL, a, Vars.Sims[a], true);
+    //=== One-shot precomputed framework energy grid (RASPA2 MakeGrid parity) ===//
+    //Placed here on purpose: framework atoms + Ewald framework structure factors are on the//
+    //device and no adsorbate has been created yet, so the grid is the pure framework field.//
+    if(Vars.SystemComponents[a].ComputeEnergyGrid)
+      Compute_EnergyGrid(Vars, a);
     //////////////////////////////////////////////////////////
     // CREATE MOLECULES IN THE BOX BEFORE SIMULAITON STARTS //
     //////////////////////////////////////////////////////////

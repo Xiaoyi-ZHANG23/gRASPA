@@ -1043,6 +1043,13 @@ struct Components
   size_t DensityGridSamples       = 0;                // Number of snapshots accumulated so far (normalization denominator)
   std::vector<std::vector<double>> DensityGrid;       // [component][ix*ny*nz + iy*nz + iz] -> accumulated atom occupancy counts
 
+  //=== Precomputed framework energy grid over one unit cell (RASPA2 MakeGrid/MakeASCIGrid parity; Ewald real+reciprocal for electrostatics) ===//
+  bool   ComputeEnergyGrid          = false;  // Default OFF: existing runs are byte-for-byte unchanged
+  double EnergyGridSpacingVDW       = 0.15;   // RASPA2 "SpacingVDWGrid" default [Angstrom]
+  double EnergyGridSpacingCoulomb   = 0.15;   // RASPA2 "SpacingCoulombGrid" default [Angstrom]
+  double EnergyGridOverlapCriteria  = 1.0e7;  // RASPA2 "EnergyOverlapCriteria" default, internal energy units (multiply by 1.2027 for K)
+  std::vector<std::string> EnergyGridTypes;   // RASPA2 "GridTypes": pseudo-atom names used as VDW probes (one grid per name)
+
   std::vector<double>Compressibility;            //Compressibility for each component, calculated when PR-EOS is used//
   std::vector<double>AmountOfExcessMolecules;    //For excess loading//
   std::vector<std::vector<double2>>ExcessLoading; //Average excess loadings for adsorbates//

@@ -134,6 +134,11 @@ MoveEnergy Ewald_TotalEnergy(Simulations& Sim, Components& SystemComponents, boo
 
 MoveEnergy Total_VDW_Coulomb_Energy(Simulations& Sim, Components& SystemComponents, ForceField FF, bool UseOffset);
 
+/////////////////////////////////////////////////////////////////
+// Precomputed framework energy grid (RASPA2 MakeGrid parity)  //
+/////////////////////////////////////////////////////////////////
+void Compute_EnergyGrid(Variables& Vars, size_t systemId);
+
 //////////////////////
 // Tail Corrections //
 //////////////////////

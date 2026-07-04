@@ -1324,6 +1324,70 @@ void read_movies_stats_print(Components& SystemComponents, size_t sim)
           fprintf(SystemComponents.OUTPUT, "Warning: DensityGridWriteEvery malformed (need 1 positive integer), keeping default %zu\n", SystemComponents.DensityGridWriteEvery);
       }
     }
+    //=== Precomputed framework energy grid keywords (RASPA2 MakeGrid/MakeASCIGrid parity) ===//
+    //Keyword names follow RASPA2 (SpacingVDWGrid/SpacingCoulombGrid/GridTypes) so a RASPA2
+    //MakeGrid input can be reused directly. GridTypes takes the pseudo-atom names on the same
+    //line; the number of names given defines the number of VDW grids (RASPA2's NumberOfGrids
+    //count keyword is therefore not needed and is ignored if present).
+    if (str.find("ComputeEnergyGrid", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "ComputeEnergyGrid")
+      {
+        if(termsScannedLined.size() > 1 && caseInSensStringCompare(termsScannedLined[1], "yes"))
+          SystemComponents.ComputeEnergyGrid = true;
+        else if(termsScannedLined.size() <= 1)
+          fprintf(SystemComponents.OUTPUT, "Warning: ComputeEnergyGrid has no yes/no argument, leaving energy grid OFF\n");
+      }
+    }
+    if (str.find("SpacingVDWGrid", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "SpacingVDWGrid")
+      {
+        double spacing = 0.0;
+        if(termsScannedLined.size() > 1 && sscanf(termsScannedLined[1].c_str(), "%lf", &spacing) == 1 && spacing > 0.0)
+          SystemComponents.EnergyGridSpacingVDW = spacing;
+        else
+          fprintf(SystemComponents.OUTPUT, "Warning: SpacingVDWGrid malformed (need 1 positive real), keeping default %f\n", SystemComponents.EnergyGridSpacingVDW);
+      }
+    }
+    if (str.find("SpacingCoulombGrid", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "SpacingCoulombGrid")
+      {
+        double spacing = 0.0;
+        if(termsScannedLined.size() > 1 && sscanf(termsScannedLined[1].c_str(), "%lf", &spacing) == 1 && spacing > 0.0)
+          SystemComponents.EnergyGridSpacingCoulomb = spacing;
+        else
+          fprintf(SystemComponents.OUTPUT, "Warning: SpacingCoulombGrid malformed (need 1 positive real), keeping default %f\n", SystemComponents.EnergyGridSpacingCoulomb);
+      }
+    }
+    if (str.find("GridTypes", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "GridTypes")
+      {
+        SystemComponents.EnergyGridTypes.clear();
+        for(size_t i = 1; i < termsScannedLined.size(); i++)
+          SystemComponents.EnergyGridTypes.push_back(termsScannedLined[i]);
+        if(SystemComponents.EnergyGridTypes.empty())
+          fprintf(SystemComponents.OUTPUT, "Warning: GridTypes given without pseudo-atom names, no VDW energy grids will be made\n");
+      }
+    }
+    if (str.find("EnergyGridOverlapCriteria", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "EnergyGridOverlapCriteria")
+      {
+        double criteria = 0.0;
+        if(termsScannedLined.size() > 1 && sscanf(termsScannedLined[1].c_str(), "%lf", &criteria) == 1 && criteria > 0.0)
+          SystemComponents.EnergyGridOverlapCriteria = criteria;
+        else
+          fprintf(SystemComponents.OUTPUT, "Warning: EnergyGridOverlapCriteria malformed (need 1 positive real, internal energy units), keeping default %g\n", SystemComponents.EnergyGridOverlapCriteria);
+      }
+    }
   }
   //printf("Writing Movies every %zu MC step(s) or cycle(s)\n", SystemComponents.MoviesEvery);
   //printf("Printing Loadings and energies every %zu MC step(s) or cycle(s)\n", SystemComponents.PrintStatsEvery);
@@ -1335,6 +1399,20 @@ void read_movies_stats_print(Components& SystemComponents, size_t sim)
             SystemComponents.DensityGridSampleEvery, SystemComponents.DensityGridWriteEvery);
   else
     fprintf(SystemComponents.OUTPUT, "3D density grid for adsorbates: no\n");
+  //Energy-grid banner: printed ONLY when the feature is on, so existing runs stay byte-identical.//
+  //NOTE: keep the braces — a brace-less if here once swallowed the banner (density-grid dangling-if bug).//
+  if(SystemComponents.ComputeEnergyGrid)
+  {
+    std::string GridTypeNames;
+    for(size_t i = 0; i < SystemComponents.EnergyGridTypes.size(); i++)
+    {
+      if(i > 0) GridTypeNames += " ";
+      GridTypeNames += SystemComponents.EnergyGridTypes[i];
+    }
+    fprintf(SystemComponents.OUTPUT, "Framework energy grid (RASPA2 MakeGrid parity, Ewald Coulomb): yes (SpacingVDWGrid %.4f, SpacingCoulombGrid %.4f, GridTypes: %s)\n",
+            SystemComponents.EnergyGridSpacingVDW, SystemComponents.EnergyGridSpacingCoulomb,
+            GridTypeNames.empty() ? "none" : GridTypeNames.c_str());
+  }
   file.close();
 }
 
