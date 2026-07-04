@@ -69,7 +69,9 @@ run_one () {  # $1=gpu $2=name $3="nx ny nz" $4=seed
           s/^NumberOfInitializationCycles .*/NumberOfInitializationCycles $INIT/;
           s/^NumberOfProductionCycles .*/NumberOfProductionCycles     $PROD/" "$R"/simulation.input
   ( cd "$R" && CUDA_VISIBLE_DEVICES="$g" "$BIN" > output.txt 2> run_stderr.txt )
-  python3 "$TOOLS/field_cost.py" --run-dir "$R" --log run_stderr.txt \
+  # production stats (loading/block averages) default to stdout since upstream
+  # "Unify result output stream" (62b25fc); parse output.txt, not run_stderr.txt.
+  python3 "$TOOLS/field_cost.py" --run-dir "$R" --log output.txt \
           --replicate "$seed" --gpu-id "$g" --gpus 1 --csv "$COSTCSV" \
           --notes "xe_pilot $name s$seed" >/dev/null 2>&1
   echo "  done: $name s$seed (gpu$g)"

@@ -42,7 +42,8 @@ run_one () { # $1 gpu ; $2 "name nx ny nz" ; $3 prod ; $4 seed
           s/^NumberOfInitializationCycles .*/NumberOfInitializationCycles $INIT/;
           s/^NumberOfProductionCycles .*/NumberOfProductionCycles     $prod/" "$R"/simulation.input
   ( cd "$R" && CUDA_VISIBLE_DEVICES="$g" "$BIN" > output.txt 2> run_stderr.txt )
-  python3 "$TOOLS/field_cost.py" --run-dir "$R" --log run_stderr.txt \
+  # loading/block-averages default to stdout since upstream 62b25fc -> parse output.txt
+  python3 "$TOOLS/field_cost.py" --run-dir "$R" --log output.txt \
           --replicate "$seed" --gpu-id "$g" --gpus 1 --csv "$COSTCSV" \
           --notes "cyclemap $name p$prod s$seed" >/dev/null 2>&1
   echo "  done: $name p$prod s$seed (gpu$g)"

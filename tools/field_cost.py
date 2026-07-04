@@ -135,7 +135,8 @@ def collect(run_dir=None, log=None, sim_input=None, replicate=None, gpu_id=None,
         if log and not os.path.isabs(log):
             log = os.path.join(run_dir, log)
         if not log:                      # auto-find a captured log
-            for cand in ("run_stderr.txt", "run.log", "output.txt"):
+            # stats default to stdout (output.txt) since upstream 62b25fc; prefer it
+            for cand in ("output.txt", "run.log", "run_stderr.txt"):
                 p = os.path.join(run_dir, cand)
                 if os.path.exists(p):
                     log = p; break
