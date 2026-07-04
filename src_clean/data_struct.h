@@ -1050,6 +1050,24 @@ struct Components
   double EnergyGridOverlapCriteria  = 1.0e7;  // RASPA2 "EnergyOverlapCriteria" default, internal energy units (multiply by 1.2027 for K)
   std::vector<std::string> EnergyGridTypes;   // RASPA2 "GridTypes": pseudo-atom names used as VDW probes (one grid per name)
 
+  //=== Widom insertion-energy grid: spatial map of Widom-sample energies (incl. Ewald) and Rosenbluth weights ===//
+  //Every PRODUCTION Widom sample is recorded: the selected trial's first-bead position bins the sample's full   //
+  //insertion energy (VDW+Real+EwaldFourier+Tail from Insertion_Body) and Rosenbluth weight W into a voxel grid. //
+  //3D generalization of RASPA2's 1D ComputeFreeEnergyProfile (betaF(q) = -ln<W(q)>).                            //
+  bool   ComputeWidomEnergyGrid  = false;     // Default OFF: existing runs are byte-for-byte unchanged
+  int3   WidomEnergyGridPoints   = {50, 50, 50}; // nx, ny, nz voxels spanning the simulation cell (fractional binning)
+  bool   WidomEnergyGridRawDump  = false;     // also write every sample as one line (x y z W E-components)
+  std::vector<std::vector<double>> WidomGridSumW;      // [comp][voxel] sum of Rosenbluth W (successfully constructed samples)
+  std::vector<std::vector<double>> WidomGridSumEW;     // [comp][voxel] sum of E_total*W (internal energy units)
+  std::vector<std::vector<double>> WidomGridSumEwaldW; // [comp][voxel] sum of (HGEwaldE+GGEwaldE)*W
+  std::vector<std::vector<double>> WidomGridMinE;      // [comp][voxel] lowest sampled insertion energy
+  std::vector<std::vector<size_t>> WidomGridCounts;    // [comp][voxel] successfully constructed samples binned
+  std::vector<size_t> WidomGridTotalSamples;           // [comp] ALL production Widom attempts (failed ones count, W=0, like RecordRosen)
+  std::vector<size_t> WidomGridFailedSamples;          // [comp] failed constructions (counted globally, not binnable: no defined position)
+  std::vector<double> WidomGridGlobalSumW;             // [comp] sum of W over ALL attempts -> cross-check vs printed Widom <W>
+  std::vector<double> WidomGridGlobalSumEW;            // [comp] sum of E_total*W -> cross-check vs printed Widom adsorption energy
+  std::vector<FILE*>  WidomGridRawFiles;               // [comp] lazily opened per-sample dump files
+
   std::vector<double>Compressibility;            //Compressibility for each component, calculated when PR-EOS is used//
   std::vector<double>AmountOfExcessMolecules;    //For excess loading//
   std::vector<std::vector<double2>>ExcessLoading; //Average excess loadings for adsorbates//

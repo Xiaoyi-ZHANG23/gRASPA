@@ -508,3 +508,230 @@ static inline void Write_TMMC(size_t Cycle, Components& SystemComponents, size_t
   textrestartFile.close();
 }
 */
+
+//============================================================================//
+//  Widom insertion-energy grid                                               //
+//                                                                            //
+//  Spatial map of Widom-sample insertion energies (VDW+Real+Ewald+Tail) and  //
+//  Rosenbluth weights, binned by the selected trial's first-bead position    //
+//  (fractional coords over the full simulation cell, like the density grid). //
+//  3D generalization of RASPA2's 1D ComputeFreeEnergyProfile, whose stored   //
+//  quantity is betaF(q) = -ln<W(q)>. Per voxel we keep count, sum(W),        //
+//  sum(E_total*W), sum(E_ewald*W) and min(E_total), so the written maps are: //
+//    betaF          = -ln( sum(W)/count )                    [dimensionless] //
+//    <E>_W          = sum(E_total*W)/sum(W)                  [Kelvin]        //
+//    <E_ewald>_W    = sum(E_ewald*W)/sum(W)                  [Kelvin]        //
+//  <E>_W is the local version of gRASPA's printed "AVERAGE WIDOM ADSORPTION  //
+//  ENERGY" (which is sum(E*W)/sum(W) over ALL samples) -> global cross-check.//
+//  Failed CBMC constructions count toward the global sample total with W=0   //
+//  (matching RecordRosen's denominator) but cannot be binned: a failed       //
+//  multi-trial CBMC sample has no single defined position.                   //
+//============================================================================//
+
+//Record ONE production Widom sample. For successful constructions, pos = selected//
+//trial's first bead (Cartesian, device-fetched by the caller) and InvCell = the  //
+//current device InverseCell (9 doubles, row-major); both ignored on failure.     //
+static inline void Accumulate_WidomEnergyGrid(Components& SystemComponents, bool Success, const double* InvCell,
+                                              double3 pos, MoveEnergy& E, double Rosenbluth, size_t comp, size_t SystemIndex)
+{
+  const int nx = SystemComponents.WidomEnergyGridPoints.x;
+  const int ny = SystemComponents.WidomEnergyGridPoints.y;
+  const int nz = SystemComponents.WidomEnergyGridPoints.z;
+  const size_t Nvoxel = (size_t)nx * (size_t)ny * (size_t)nz;
+  const size_t NComp  = (size_t)SystemComponents.NComponents.x;
+
+  //Lazily allocate accumulators (adsorbate components only get voxel arrays)//
+  if(SystemComponents.WidomGridCounts.size() != NComp)
+  {
+    SystemComponents.WidomGridSumW.assign(NComp, std::vector<double>());
+    SystemComponents.WidomGridSumEW.assign(NComp, std::vector<double>());
+    SystemComponents.WidomGridSumEwaldW.assign(NComp, std::vector<double>());
+    SystemComponents.WidomGridMinE.assign(NComp, std::vector<double>());
+    SystemComponents.WidomGridCounts.assign(NComp, std::vector<size_t>());
+    SystemComponents.WidomGridTotalSamples.assign(NComp, 0);
+    SystemComponents.WidomGridFailedSamples.assign(NComp, 0);
+    SystemComponents.WidomGridGlobalSumW.assign(NComp, 0.0);
+    SystemComponents.WidomGridGlobalSumEW.assign(NComp, 0.0);
+    SystemComponents.WidomGridRawFiles.assign(NComp, nullptr);
+    for(int c = SystemComponents.NComponents.y; c < SystemComponents.NComponents.x; c++)
+    {
+      SystemComponents.WidomGridSumW[c].assign(Nvoxel, 0.0);
+      SystemComponents.WidomGridSumEW[c].assign(Nvoxel, 0.0);
+      SystemComponents.WidomGridSumEwaldW[c].assign(Nvoxel, 0.0);
+      SystemComponents.WidomGridMinE[c].assign(Nvoxel, 1.0e30);
+      SystemComponents.WidomGridCounts[c].assign(Nvoxel, 0);
+    }
+  }
+  if(comp >= NComp || SystemComponents.WidomGridSumW[comp].size() != Nvoxel) return;
+
+  //Global sums: every attempt counts (failed ones as W=0), mirroring RecordRosen//
+  SystemComponents.WidomGridTotalSamples[comp]++;
+  if(!Success) { SystemComponents.WidomGridFailedSamples[comp]++; return; }
+
+  const double Etot   = E.total();
+  const double Eewald = E.HGEwaldE + E.GGEwaldE;
+  SystemComponents.WidomGridGlobalSumW[comp]  += Rosenbluth;
+  SystemComponents.WidomGridGlobalSumEW[comp] += Etot * Rosenbluth;
+
+  //Bin by fractional coordinate (same convention as Accumulate_DensityGrid)//
+  double sx = InvCell[0]*pos.x + InvCell[3]*pos.y + InvCell[6]*pos.z;
+  double sy = InvCell[1]*pos.x + InvCell[4]*pos.y + InvCell[7]*pos.z;
+  double sz = InvCell[2]*pos.x + InvCell[5]*pos.y + InvCell[8]*pos.z;
+  sx -= std::floor(sx); sy -= std::floor(sy); sz -= std::floor(sz);
+  int ix = (int)(sx * nx); if(ix >= nx) ix = nx - 1; if(ix < 0) ix = 0;
+  int iy = (int)(sy * ny); if(iy >= ny) iy = ny - 1; if(iy < 0) iy = 0;
+  int iz = (int)(sz * nz); if(iz >= nz) iz = nz - 1; if(iz < 0) iz = 0;
+  const size_t voxel = (size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz;
+
+  SystemComponents.WidomGridSumW[comp][voxel]      += Rosenbluth;
+  SystemComponents.WidomGridSumEW[comp][voxel]     += Etot * Rosenbluth;
+  SystemComponents.WidomGridSumEwaldW[comp][voxel] += Eewald * Rosenbluth;
+  SystemComponents.WidomGridCounts[comp][voxel]++;
+  if(Etot < SystemComponents.WidomGridMinE[comp][voxel]) SystemComponents.WidomGridMinE[comp][voxel] = Etot;
+
+  //Optional raw per-sample dump: "the Widom energy at each sampled point"//
+  if(SystemComponents.WidomEnergyGridRawDump)
+  {
+    if(SystemComponents.WidomGridRawFiles[comp] == nullptr)
+    {
+      std::string dirname = "WidomEnergyGrid/System_" + std::to_string(SystemIndex) + "/";
+      std::filesystem::path cwd = std::filesystem::current_path();
+      std::filesystem::create_directories(cwd / dirname);
+      std::string mname = (comp < SystemComponents.MoleculeName.size()) ? SystemComponents.MoleculeName[comp] : ("Component_" + std::to_string(comp));
+      std::string fname = dirname + "WidomSamples_" + std::to_string(comp) + "_" + mname + ".dat";
+      SystemComponents.WidomGridRawFiles[comp] = fopen((cwd / fname).c_str(), "w");
+      if(SystemComponents.WidomGridRawFiles[comp] != nullptr)
+        fprintf(SystemComponents.WidomGridRawFiles[comp],
+                "# x[A] y[A] z[A] RosenbluthW E_total[K] E_vdw[K] E_real[K] E_ewald[K] E_tail[K] (first-bead position; energies incl. Ewald reciprocal)\n");
+      else
+        fprintf(SystemComponents.OUTPUT, "WARNING: WidomEnergyGrid: could not open raw dump file %s, raw dump disabled for this component\n", fname.c_str());
+    }
+    const double K = 1.2027242847; //internal energy units -> Kelvin//
+    if(SystemComponents.WidomGridRawFiles[comp] != nullptr)
+      fprintf(SystemComponents.WidomGridRawFiles[comp], "%g %g %g %g %g %g %g %g %g\n",
+              pos.x, pos.y, pos.z, Rosenbluth, Etot * K,
+              (E.HGVDW + E.GGVDW) * K, (E.HGReal + E.GGReal) * K, Eewald * K, E.TailE * K);
+  }
+}
+
+//Write the accumulated Widom energy grid: one ASCII .grid (all per-voxel stats) +      //
+//three .cube maps per adsorbate component, plus a global cross-check line to OUTPUT.   //
+static inline void WriteWidomEnergyGrid(Components& SystemComponents, Boxsize& HostBox, size_t SystemIndex)
+{
+  if(!SystemComponents.ComputeWidomEnergyGrid) return;
+  if(SystemComponents.WidomGridCounts.empty()) return;
+
+  const int nx = SystemComponents.WidomEnergyGridPoints.x;
+  const int ny = SystemComponents.WidomEnergyGridPoints.y;
+  const int nz = SystemComponents.WidomEnergyGridPoints.z;
+  const size_t Nvoxel = (size_t)nx * (size_t)ny * (size_t)nz;
+  const double K = 1.2027242847;             //internal energy units -> Kelvin//
+  const double ANG_TO_BOHR = 1.8897259885789;
+  const double EMPTY_E_K   = 2.0e7 * K;      //unsampled-voxel marker in energy cubes (EnergyGrid cap convention)//
+  const double EMPTY_BETAF = 50.0;           //unsampled-voxel marker in betaF cube (W ~ e^-50: inaccessible)//
+
+  //Lattice vectors as rows of HostBox.Cell//
+  const double* C = HostBox.Cell;
+
+  std::string dirname = "WidomEnergyGrid/System_" + std::to_string(SystemIndex) + "/";
+  std::filesystem::path cwd = std::filesystem::current_path();
+  std::filesystem::create_directories(cwd / dirname);
+
+  for(int comp = SystemComponents.NComponents.y; comp < SystemComponents.NComponents.x; comp++)
+  {
+    if(SystemComponents.WidomGridCounts[comp].size() != Nvoxel) continue;
+    if(SystemComponents.WidomGridTotalSamples[comp] == 0) continue;
+    std::string mname = (comp < (int)SystemComponents.MoleculeName.size()) ? SystemComponents.MoleculeName[comp] : ("Component_" + std::to_string(comp));
+    std::string base  = dirname + "WidomEnergyGrid_" + std::to_string(comp) + "_" + mname;
+
+    //---- ASCII per-voxel stats: voxel centers in Cartesian ----//
+    FILE* fgrid = fopen((cwd / (base + ".grid")).c_str(), "w");
+    if(fgrid == nullptr)
+    { fprintf(SystemComponents.OUTPUT, "WARNING: WidomEnergyGrid: could not open %s.grid for writing, skipping\n", base.c_str()); }
+    else
+    {
+      fprintf(fgrid, "# Widom insertion-energy grid, component %d (%s), %zu samples (%zu failed, unbinned)\n",
+              comp, mname.c_str(), SystemComponents.WidomGridTotalSamples[comp], SystemComponents.WidomGridFailedSamples[comp]);
+      fprintf(fgrid, "# x[A] y[A] z[A] count meanW betaF(-ln meanW) E_W[K] E_ewald_W[K] minE[K]   (E_W = sum(E*W)/sum(W); empty voxels: count=0, other columns '?')\n");
+      for(int ix = 0; ix < nx; ix++)
+        for(int iy = 0; iy < ny; iy++)
+          for(int iz = 0; iz < nz; iz++)
+          {
+            const size_t v = (size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz;
+            const double fx = (ix + 0.5) / nx, fy = (iy + 0.5) / ny, fz = (iz + 0.5) / nz;
+            const double px = C[0]*fx + C[3]*fy + C[6]*fz;
+            const double py = C[1]*fx + C[4]*fy + C[7]*fz;
+            const double pz = C[2]*fx + C[5]*fy + C[8]*fz;
+            const size_t n = SystemComponents.WidomGridCounts[comp][v];
+            if(n == 0)
+            { fprintf(fgrid, "%g %g %g 0 ? ? ? ? ?\n", px, py, pz); continue; }
+            const double meanW = SystemComponents.WidomGridSumW[comp][v] / (double)n;
+            const double sumW  = SystemComponents.WidomGridSumW[comp][v];
+            const double E_W   = (sumW > 0.0) ? SystemComponents.WidomGridSumEW[comp][v]      / sumW * K : 0.0;
+            const double Eew_W = (sumW > 0.0) ? SystemComponents.WidomGridSumEwaldW[comp][v]  / sumW * K : 0.0;
+            const double betaF = (meanW > 0.0) ? -std::log(meanW) : EMPTY_BETAF;
+            fprintf(fgrid, "%g %g %g %zu %g %g %g %g %g\n", px, py, pz, n, meanW, betaF, E_W, Eew_W,
+                    SystemComponents.WidomGridMinE[comp][v] * K);
+          }
+      fclose(fgrid);
+    }
+
+    //---- three .cube maps (triclinic-correct voxel vectors, geometry in Bohr) ----//
+    struct CubeSpec { const char* tag; const char* what; };
+    const CubeSpec specs[3] = {
+      {"EnergyW", "Rosenbluth-weighted mean Widom insertion energy sum(E*W)/sum(W) [Kelvin]"},
+      {"BetaF",   "betaF = -ln( sum(W)/count ) per voxel [dimensionless] (RASPA2 FreeEnergyProfile quantity, 3D)"},
+      {"EwaldW",  "Rosenbluth-weighted mean Ewald (reciprocal+exclusion) part of the insertion energy [Kelvin]"},
+    };
+    for(int s = 0; s < 3; s++)
+    {
+      std::ofstream f(cwd / (base + "_" + specs[s].tag + ".cube"), std::ios::out);
+      f << "gRASPA Widom insertion-energy grid, component " << comp << " (" << mname << ")\n";
+      f << specs[s].what << "; " << SystemComponents.WidomGridTotalSamples[comp] << " samples; unsampled voxels = "
+        << (s == 1 ? EMPTY_BETAF : EMPTY_E_K) << "\n";
+      f << std::fixed << std::setprecision(6);
+      f << "    1    0.000000    0.000000    0.000000\n";
+      f << std::scientific << std::setprecision(6);
+      f << nx << " " << (C[0]/nx)*ANG_TO_BOHR << " " << (C[1]/nx)*ANG_TO_BOHR << " " << (C[2]/nx)*ANG_TO_BOHR << "\n";
+      f << ny << " " << (C[3]/ny)*ANG_TO_BOHR << " " << (C[4]/ny)*ANG_TO_BOHR << " " << (C[5]/ny)*ANG_TO_BOHR << "\n";
+      f << nz << " " << (C[6]/nz)*ANG_TO_BOHR << " " << (C[7]/nz)*ANG_TO_BOHR << " " << (C[8]/nz)*ANG_TO_BOHR << "\n";
+      f << "    1    1.000000    0.000000    0.000000    0.000000\n";
+      for(int ix = 0; ix < nx; ix++)
+        for(int iy = 0; iy < ny; iy++)
+        {
+          int col = 0;
+          for(int iz = 0; iz < nz; iz++)
+          {
+            const size_t v = (size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz;
+            const size_t n = SystemComponents.WidomGridCounts[comp][v];
+            double val;
+            if(n == 0) val = (s == 1) ? EMPTY_BETAF : EMPTY_E_K;
+            else
+            {
+              const double sumW  = SystemComponents.WidomGridSumW[comp][v];
+              const double meanW = sumW / (double)n;
+              if(s == 0)      val = (sumW > 0.0) ? SystemComponents.WidomGridSumEW[comp][v]     / sumW * K : EMPTY_E_K;
+              else if(s == 1) val = (meanW > 0.0) ? -std::log(meanW) : EMPTY_BETAF;
+              else            val = (sumW > 0.0) ? SystemComponents.WidomGridSumEwaldW[comp][v] / sumW * K : EMPTY_E_K;
+            }
+            f << " " << std::setw(13) << val;
+            if(++col % 6 == 0) { f << "\n"; }
+          }
+          if(col % 6 != 0) f << "\n";
+        }
+      f.close();
+    }
+
+    //---- close raw dump + global cross-check line (must match printed Widom statistics) ----//
+    if(comp < (int)SystemComponents.WidomGridRawFiles.size() && SystemComponents.WidomGridRawFiles[comp] != nullptr)
+    { fclose(SystemComponents.WidomGridRawFiles[comp]); SystemComponents.WidomGridRawFiles[comp] = nullptr; }
+    const double globW  = SystemComponents.WidomGridGlobalSumW[comp];
+    const size_t nTot   = SystemComponents.WidomGridTotalSamples[comp];
+    fprintf(SystemComponents.OUTPUT,
+            "Widom energy grid, component %d (%s): %zu samples (%zu failed), global <W> = %.10g, global sum(E*W)/sum(W) = %.5f [K] (cross-check vs printed Widom statistics); wrote %s.grid + _EnergyW/_BetaF/_EwaldW.cube\n",
+            comp, mname.c_str(), nTot, SystemComponents.WidomGridFailedSamples[comp],
+            (nTot > 0) ? globW / (double)nTot : 0.0,
+            (globW > 0.0) ? SystemComponents.WidomGridGlobalSumEW[comp] / globW * K : 0.0,
+            base.c_str());
+  }
+}

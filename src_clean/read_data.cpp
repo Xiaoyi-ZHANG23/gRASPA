@@ -1388,6 +1388,43 @@ void read_movies_stats_print(Components& SystemComponents, size_t sim)
           fprintf(SystemComponents.OUTPUT, "Warning: EnergyGridOverlapCriteria malformed (need 1 positive real, internal energy units), keeping default %g\n", SystemComponents.EnergyGridOverlapCriteria);
       }
     }
+    //=== Widom insertion-energy grid keywords (3D generalization of RASPA2 ComputeFreeEnergyProfile) ===//
+    if (str.find("ComputeWidomEnergyGrid", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "ComputeWidomEnergyGrid")
+      {
+        if(termsScannedLined.size() > 1 && caseInSensStringCompare(termsScannedLined[1], "yes"))
+          SystemComponents.ComputeWidomEnergyGrid = true;
+        else if(termsScannedLined.size() <= 1)
+          fprintf(SystemComponents.OUTPUT, "Warning: ComputeWidomEnergyGrid has no yes/no argument, leaving Widom energy grid OFF\n");
+      }
+    }
+    if (str.find("WidomEnergyGridPoints", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "WidomEnergyGridPoints")
+      {
+        int nx = 0, ny = 0, nz = 0;
+        if(termsScannedLined.size() > 3 &&
+           sscanf(termsScannedLined[1].c_str(), "%d", &nx) == 1 &&
+           sscanf(termsScannedLined[2].c_str(), "%d", &ny) == 1 &&
+           sscanf(termsScannedLined[3].c_str(), "%d", &nz) == 1 &&
+           nx > 0 && ny > 0 && nz > 0)
+          SystemComponents.WidomEnergyGridPoints = {nx, ny, nz};
+        else
+          fprintf(SystemComponents.OUTPUT, "Warning: WidomEnergyGridPoints malformed (need 3 positive integers: nx ny nz), keeping default %d x %d x %d\n", SystemComponents.WidomEnergyGridPoints.x, SystemComponents.WidomEnergyGridPoints.y, SystemComponents.WidomEnergyGridPoints.z);
+      }
+    }
+    if (str.find("WidomEnergyGridRawDump", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "WidomEnergyGridRawDump")
+      {
+        if(termsScannedLined.size() > 1 && caseInSensStringCompare(termsScannedLined[1], "yes"))
+          SystemComponents.WidomEnergyGridRawDump = true;
+      }
+    }
   }
   //printf("Writing Movies every %zu MC step(s) or cycle(s)\n", SystemComponents.MoviesEvery);
   //printf("Printing Loadings and energies every %zu MC step(s) or cycle(s)\n", SystemComponents.PrintStatsEvery);
@@ -1412,6 +1449,13 @@ void read_movies_stats_print(Components& SystemComponents, size_t sim)
     fprintf(SystemComponents.OUTPUT, "Framework energy grid (RASPA2 MakeGrid parity, Ewald Coulomb): yes (SpacingVDWGrid %.4f, SpacingCoulombGrid %.4f, GridTypes: %s)\n",
             SystemComponents.EnergyGridSpacingVDW, SystemComponents.EnergyGridSpacingCoulomb,
             GridTypeNames.empty() ? "none" : GridTypeNames.c_str());
+  }
+  //Widom energy-grid banner: printed ONLY when the feature is on (braces mandatory, see density-grid gotcha).//
+  if(SystemComponents.ComputeWidomEnergyGrid)
+  {
+    fprintf(SystemComponents.OUTPUT, "Widom insertion-energy grid: yes (%d x %d x %d voxels, raw sample dump: %s)\n",
+            SystemComponents.WidomEnergyGridPoints.x, SystemComponents.WidomEnergyGridPoints.y, SystemComponents.WidomEnergyGridPoints.z,
+            SystemComponents.WidomEnergyGridRawDump ? "yes" : "no");
   }
   file.close();
 }

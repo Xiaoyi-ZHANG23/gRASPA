@@ -182,6 +182,26 @@ void RunMoves(Variables& Vars, size_t box_index, int Cycle)
       SystemComponents.Moves[comp].RecordRosen(Rosenbluth, WIDOM);
       //weight with Rosenbluth (heavy weight on low (attractive) energy, lower on high energy)
       SystemComponents.Moves[comp].Rosen[blockID].widom_energy += MOVES.INSERTION.energy * Rosenbluth;
+      //=== Widom insertion-energy grid: record this sample (position + energy incl. Ewald) ===//
+      if(SystemComponents.ComputeWidomEnergyGrid)
+      {
+        CBMC_Variables& IV = MOVES.INSERTION.InsertionVariables;
+        double3 FirstBead = {0.0, 0.0, 0.0};
+        double  InvCell[9] = {0.0};
+        if(IV.SuccessConstruction)
+        {
+          cudaDeviceSynchronize();
+          //Selected trial's first bead: Sims.New for single beads, Sims.Old.pos[0] for chains//
+          //(same layout the block-pocket check in Insertion_Body reads)//
+          if(SystemComponents.Moleculesize[comp] == 1)
+            cudaMemcpy(&FirstBead, &Sims.New.pos[IV.selectedTrial], sizeof(double3), cudaMemcpyDeviceToHost);
+          else
+            cudaMemcpy(&FirstBead, &Sims.Old.pos[0], sizeof(double3), cudaMemcpyDeviceToHost);
+          cudaMemcpy(InvCell, Sims.Box.InverseCell, 9 * sizeof(double), cudaMemcpyDeviceToHost);
+        }
+        Accumulate_WidomEnergyGrid(SystemComponents, IV.SuccessConstruction, InvCell, FirstBead,
+                                   MOVES.INSERTION.energy, Rosenbluth, comp, box_index);
+      }
     }
   }
   else if(RANDOMNUMBER < SystemComponents.Moves[comp].ReinsertionProb)
@@ -588,6 +608,15 @@ inline void MCEndOfPhaseSummary(Variables& Vars)
         Copy_AtomData_from_Device(device_System, Sims[sim].d_a, SystemComponents[sim], HostBox, Sims[sim]);
         HostBox.Volume = Sims[sim].Box.Volume;
         WriteDensityGrid(SystemComponents[sim], HostBox, sim);
+      }
+      //=== Flush the Widom insertion-energy grid at the end of the production phase ===//
+      if(Vars.SimulationMode == PRODUCTION && SystemComponents[sim].ComputeWidomEnergyGrid)
+      {
+        Boxsize& HostBox = Vars.Box[sim];
+        cudaMemcpy(HostBox.Cell,        Sims[sim].Box.Cell,        9 * sizeof(double), cudaMemcpyDeviceToHost);
+        cudaMemcpy(HostBox.InverseCell, Sims[sim].Box.InverseCell, 9 * sizeof(double), cudaMemcpyDeviceToHost);
+        HostBox.Volume = Sims[sim].Box.Volume;
+        WriteWidomEnergyGrid(SystemComponents[sim], HostBox, sim);
       }
     }
     PrintSystemMoves(Vars);
