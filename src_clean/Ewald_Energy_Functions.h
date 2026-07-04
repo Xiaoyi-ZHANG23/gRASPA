@@ -121,6 +121,11 @@ __device__ void Initialize_Copy_Positions_Together(Atoms*& d_a, Atoms& New, Atom
   else if(MoveType == INSERTION || MoveType == CBCF_INSERTION) // Insertion & Fractional Insertion //
   {
     //Put the trial orientations in New to Old, right after the first bead position//
+    //KNOWN ISSUE (see KNOWN_ISSUES.md): for a SINGLE-BEAD molecule chainsize==0, so this
+    //branch copies NOTHING and Old.pos[0]/Old.charge[0] are never staged here; the first
+    //bead slot is only written by get_random_trial_orientation (chains). The wave-vector
+    //build below then reads a STALE Old.pos[0] -> wrong Ewald difference for single-bead
+    //CHARGED species in CBMC INSERTION/WIDOM. Multi-bead and chargeless species are fine.//
     if(ij < chainsize)
     {
       Old.pos[ij + 1]       = New.pos[Location * chainsize + ij];
