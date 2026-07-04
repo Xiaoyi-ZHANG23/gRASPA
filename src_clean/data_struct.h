@@ -1,3 +1,4 @@
+#include "gpu_compat.h"
 #include <filesystem>
 
 #include <stdio.h>
@@ -1279,7 +1280,7 @@ struct Components
     }
   }
 
-  FILE* OUTPUT = stderr;
+  FILE* OUTPUT = stdout;  // unify ROCm/CUDA output: statistics go to stdout (output.txt) with the rest, not stderr
 };
 
 
