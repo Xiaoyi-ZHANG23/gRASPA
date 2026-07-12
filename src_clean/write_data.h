@@ -253,24 +253,63 @@ static inline void Accumulate_DensityGrid(Components& SystemComponents, Boxsize&
       SystemComponents.DensityGrid[comp].assign(Nvoxel, 0.0);
   }
 
-  const double* Inv = HostBox.InverseCell; //fractional s = InverseCell * pos (see ewald_preparation.h:52)//
+  const double* Inv  = HostBox.InverseCell; //fractional s = InverseCell * pos (see ewald_preparation.h:52)//
+  const double* Cell = HostBox.Cell;        //cartesian = Cell * fractional (column-major: Cell[0/4/8] = Lx/Ly/Lz)//
+  const bool useCenter = SystemComponents.DensityGridMolecularCenter;
   for(int comp = SystemComponents.NComponents.y; comp < SystemComponents.NComponents.x; comp++)
   {
     Atoms& A = SystemComponents.HostSystem[comp];
     std::vector<double>& Grid = SystemComponents.DensityGrid[comp];
     if(Grid.size() != Nvoxel) continue;
-    for(size_t j = 0; j < A.size; j++)
+    if(useCenter)
     {
-      const double3 p = A.pos[j];
-      double sx = Inv[0]*p.x + Inv[3]*p.y + Inv[6]*p.z;
-      double sy = Inv[1]*p.x + Inv[4]*p.y + Inv[7]*p.z;
-      double sz = Inv[2]*p.x + Inv[5]*p.y + Inv[8]*p.z;
-      //wrap fractional coordinate into [0,1)//
-      sx -= std::floor(sx); sy -= std::floor(sy); sz -= std::floor(sz);
-      int ix = (int)(sx * nx); if(ix >= nx) ix = nx - 1; if(ix < 0) ix = 0;
-      int iy = (int)(sy * ny); if(iy >= ny) iy = ny - 1; if(iy < 0) iy = 0;
-      int iz = (int)(sz * nz); if(iz >= nz) iz = nz - 1; if(iz < 0) iz = 0;
-      Grid[(size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz] += 1.0;
+      //Bin ONE point per molecule: the molecular geometric center, computed PBC-safely via
+      //minimum image relative to the molecule's first atom. For a symmetric molecule (CO2:
+      //O=C=O) this is exactly the central atom (C) = center of mass, for any orientation;
+      //for a monatomic species (Xe) it is the atom itself. The field then integrates to the
+      //average MOLECULE count (= reported loading), not the atom count.//
+      const size_t ms = (A.Molsize > 0) ? A.Molsize : 1;
+      for(size_t m0 = 0; m0 + ms <= A.size; m0 += ms)
+      {
+        const double3 ref = A.pos[m0];
+        double cx = 0.0, cy = 0.0, cz = 0.0;
+        for(size_t k = 0; k < ms; k++)
+        {
+          const double dx = A.pos[m0+k].x - ref.x, dy = A.pos[m0+k].y - ref.y, dz = A.pos[m0+k].z - ref.z;
+          double fx = Inv[0]*dx + Inv[3]*dy + Inv[6]*dz;
+          double fy = Inv[1]*dx + Inv[4]*dy + Inv[7]*dz;
+          double fz = Inv[2]*dx + Inv[5]*dy + Inv[8]*dz;
+          fx -= std::round(fx); fy -= std::round(fy); fz -= std::round(fz);   //minimum image//
+          cx += Cell[0]*fx + Cell[3]*fy + Cell[6]*fz;
+          cy += Cell[1]*fx + Cell[4]*fy + Cell[7]*fz;
+          cz += Cell[2]*fx + Cell[5]*fy + Cell[8]*fz;
+        }
+        const double px = ref.x + cx/(double)ms, py = ref.y + cy/(double)ms, pz = ref.z + cz/(double)ms;
+        double sx = Inv[0]*px + Inv[3]*py + Inv[6]*pz;
+        double sy = Inv[1]*px + Inv[4]*py + Inv[7]*pz;
+        double sz = Inv[2]*px + Inv[5]*py + Inv[8]*pz;
+        sx -= std::floor(sx); sy -= std::floor(sy); sz -= std::floor(sz);
+        int ix = (int)(sx * nx); if(ix >= nx) ix = nx - 1; if(ix < 0) ix = 0;
+        int iy = (int)(sy * ny); if(iy >= ny) iy = ny - 1; if(iy < 0) iy = 0;
+        int iz = (int)(sz * nz); if(iz >= nz) iz = nz - 1; if(iz < 0) iz = 0;
+        Grid[(size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz] += 1.0;
+      }
+    }
+    else
+    {
+      for(size_t j = 0; j < A.size; j++)
+      {
+        const double3 p = A.pos[j];
+        double sx = Inv[0]*p.x + Inv[3]*p.y + Inv[6]*p.z;
+        double sy = Inv[1]*p.x + Inv[4]*p.y + Inv[7]*p.z;
+        double sz = Inv[2]*p.x + Inv[5]*p.y + Inv[8]*p.z;
+        //wrap fractional coordinate into [0,1)//
+        sx -= std::floor(sx); sy -= std::floor(sy); sz -= std::floor(sz);
+        int ix = (int)(sx * nx); if(ix >= nx) ix = nx - 1; if(ix < 0) ix = 0;
+        int iy = (int)(sy * ny); if(iy >= ny) iy = ny - 1; if(iy < 0) iy = 0;
+        int iz = (int)(sz * nz); if(iz >= nz) iz = nz - 1; if(iz < 0) iz = 0;
+        Grid[(size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz] += 1.0;
+      }
     }
   }
   SystemComponents.DensityGridSamples++;

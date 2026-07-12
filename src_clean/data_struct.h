@@ -1038,6 +1038,7 @@ struct Components
 
   //=== 3D spatial adsorbate-density grid (RASPA2 ComputeDensityProfile3DVTKGrid parity) ===//
   bool   ComputeDensityGrid       = false;            // Default OFF: existing runs are byte-for-byte unchanged
+  bool   DensityGridMolecularCenter = false;          // Default OFF (bin every atom). ON: bin ONE point per molecule = its geometric center (= C for CO2, the atom for Xe) -> integral of the field = molecule count (= loading), not atom count.
   int3   DensityGridPoints        = {150, 150, 150};  // nx, ny, nz voxels spanning the unit cell
   size_t DensityGridSampleEvery   = 10;               // Accumulate adsorbate positions every X production cycles
   size_t DensityGridWriteEvery    = 5000;             // Flush the grid to disk every X production cycles (also flushed at end of production)

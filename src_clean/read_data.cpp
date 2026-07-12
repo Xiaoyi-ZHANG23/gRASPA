@@ -1367,6 +1367,15 @@ void read_movies_stats_print(Components& SystemComponents, size_t sim)
           fprintf(SystemComponents.OUTPUT, "Warning: DensityGridWriteEvery malformed (need 1 positive integer), keeping default %zu\n", SystemComponents.DensityGridWriteEvery);
       }
     }
+    if (str.find("DensityGridMolecularCenter", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "DensityGridMolecularCenter")
+      {
+        if(termsScannedLined.size() > 1 && caseInSensStringCompare(termsScannedLined[1], "yes"))
+          SystemComponents.DensityGridMolecularCenter = true;
+      }
+    }
     //=== Precomputed framework energy grid keywords (RASPA2 MakeGrid/MakeASCIGrid parity) ===//
     //Keyword names follow RASPA2 (SpacingVDWGrid/SpacingCoulombGrid/GridTypes) so a RASPA2
     //MakeGrid input can be reused directly. GridTypes takes the pseudo-atom names on the same
@@ -1479,6 +1488,8 @@ void read_movies_stats_print(Components& SystemComponents, size_t sim)
             SystemComponents.DensityGridSampleEvery, SystemComponents.DensityGridWriteEvery);
   else
     fprintf(SystemComponents.OUTPUT, "3D density grid for adsorbates: no\n");
+  if(SystemComponents.ComputeDensityGrid && SystemComponents.DensityGridMolecularCenter)
+    fprintf(SystemComponents.OUTPUT, "  density-grid binning: MOLECULAR CENTER (one point/molecule; CO2 -> C, monatomic -> the atom; integral = molecule count)\n");
   //Energy-grid banner: printed ONLY when the feature is on, so existing runs stay byte-identical.//
   //NOTE: keep the braces — a brace-less if here once swallowed the banner (density-grid dangling-if bug).//
   if(SystemComponents.ComputeEnergyGrid)

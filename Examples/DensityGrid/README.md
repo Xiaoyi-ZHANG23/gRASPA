@@ -11,6 +11,12 @@ a real rigid framework, where the spatial density "inside the MOF" is meaningful
   is directly comparable to the run's reported average loading).
 - `DensityGridWriteEvery 100000` — large, so the grid is written once at end of production.
 - `RandomSeed 0` — deterministic, so the run is bit-comparable across builds.
+- `DensityGridMolecularCenter yes` (optional, default `no`) — bin **one point per molecule**
+  at its geometric center (PBC-safe minimum-image average of the molecule's atoms) instead of
+  every atom. For CO2 (O=C=O, symmetric) the center is exactly the C atom = center of mass, for
+  any orientation; for a monatomic species it is the atom itself. The field then integrates to
+  the average **molecule** count (= reported loading) rather than the atom count (3x for CO2).
+  Default OFF keeps the per-atom output byte-identical.
 
 ## Output
 At the end of the production phase gRASPA writes, per adsorbate component, under
