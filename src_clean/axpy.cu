@@ -486,6 +486,8 @@ void GatherStatisticsDuringSimulation(Variables& Vars, size_t systemId, size_t c
       Boxsize& HostBox = Vars.Box[systemId];
       HostBox.Volume = Sims.Box.Volume;
       WriteDensityGrid(SystemComponents, HostBox, systemId);
+      //Optional in-run convergence check (DensityGridTanimotoStop yes; default OFF = no-op)//
+      Check_DensityGrid_TanimotoStop(SystemComponents);
     }
   }
   if(SimulationMode != INITIALIZATION && i > 0)
@@ -674,6 +676,16 @@ void Run_Simulation_MultipleBoxes(Variables& Vars)
     }
     if(i > 0 && i % 500 == 0)
       Update_Max_GibbsVolume(Vars.GibbsStatistics);
+    //Optional early stop: only when EVERY box that enabled DensityGridTanimotoStop has
+    //converged (keyword default OFF -> this can never trigger in original usage)//
+    if(Vars.SimulationMode == PRODUCTION)
+    {
+      bool anyStop = false, allConv = true;
+      for(size_t sim = 0; sim < NumberOfSimulations; sim++)
+        if(Vars.SystemComponents[sim].DensityGridTanimotoStop)
+        { anyStop = true; if(!Vars.SystemComponents[sim].DensityGridConverged) allConv = false; }
+      if(anyStop && allConv) break;
+    }
   }
   MCEndOfPhaseSummary(Vars);
 }
@@ -690,6 +702,9 @@ void Run_Simulation_ForOneBox(Variables& Vars, size_t box_index)
       RunMoves(Vars, box_index, i);
     }
     GatherStatisticsDuringSimulation(Vars, box_index, i);
+    //Optional early stop (DensityGridTanimotoStop yes; DensityGridConverged can only become
+    //true when that keyword is on, so default behavior is byte-for-byte unchanged)//
+    if(Vars.SimulationMode == PRODUCTION && Vars.SystemComponents[box_index].DensityGridConverged) break;
   }
   MCEndOfPhaseSummary(Vars);
 }

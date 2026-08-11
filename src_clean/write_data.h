@@ -252,6 +252,19 @@ static inline void Accumulate_DensityGrid(Components& SystemComponents, Boxsize&
     for(int comp = SystemComponents.NComponents.y; comp < SystemComponents.NComponents.x; comp++)
       SystemComponents.DensityGrid[comp].assign(Nvoxel, 0.0);
   }
+  //Optional Tanimoto stop: mirror allocation for the split-half accumulator (feature default OFF)//
+  if(SystemComponents.DensityGridTanimotoStop &&
+     SystemComponents.DensityGridHalf.size() != (size_t)SystemComponents.NComponents.x)
+  {
+    SystemComponents.DensityGridHalf.assign((size_t)SystemComponents.NComponents.x, std::vector<double>());
+    for(int comp = SystemComponents.NComponents.y; comp < SystemComponents.NComponents.x; comp++)
+      SystemComponents.DensityGridHalf[comp].assign(Nvoxel, 0.0);
+  }
+  //Half assignment: alternate DensityGridWriteEvery-sized blocks of snapshots go to half A.
+  //Block length >> chain autocorrelation makes the two halves quasi-independent.//
+  const size_t snapsPerBlock = (SystemComponents.DensityGridWriteEvery >= SystemComponents.DensityGridSampleEvery)
+                             ? SystemComponents.DensityGridWriteEvery / SystemComponents.DensityGridSampleEvery : 1;
+  const bool inHalfA = ((SystemComponents.DensityGridSamples / (snapsPerBlock > 0 ? snapsPerBlock : 1)) % 2) == 0;
 
   const double* Inv  = HostBox.InverseCell; //fractional s = InverseCell * pos (see ewald_preparation.h:52)//
   const double* Cell = HostBox.Cell;        //cartesian = Cell * fractional (column-major: Cell[0/4/8] = Lx/Ly/Lz)//
@@ -261,6 +274,9 @@ static inline void Accumulate_DensityGrid(Components& SystemComponents, Boxsize&
     Atoms& A = SystemComponents.HostSystem[comp];
     std::vector<double>& Grid = SystemComponents.DensityGrid[comp];
     if(Grid.size() != Nvoxel) continue;
+    double* HalfPtr = (SystemComponents.DensityGridTanimotoStop && inHalfA &&
+                       SystemComponents.DensityGridHalf[comp].size() == Nvoxel)
+                    ? SystemComponents.DensityGridHalf[comp].data() : nullptr;
     if(useCenter)
     {
       //Bin ONE point per molecule: the molecular geometric center, computed PBC-safely via
@@ -292,7 +308,9 @@ static inline void Accumulate_DensityGrid(Components& SystemComponents, Boxsize&
         int ix = (int)(sx * nx); if(ix >= nx) ix = nx - 1; if(ix < 0) ix = 0;
         int iy = (int)(sy * ny); if(iy >= ny) iy = ny - 1; if(iy < 0) iy = 0;
         int iz = (int)(sz * nz); if(iz >= nz) iz = nz - 1; if(iz < 0) iz = 0;
-        Grid[(size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz] += 1.0;
+        const size_t vox = (size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz;
+        Grid[vox] += 1.0;
+        if(HalfPtr) HalfPtr[vox] += 1.0;
       }
     }
     else
@@ -308,11 +326,58 @@ static inline void Accumulate_DensityGrid(Components& SystemComponents, Boxsize&
         int ix = (int)(sx * nx); if(ix >= nx) ix = nx - 1; if(ix < 0) ix = 0;
         int iy = (int)(sy * ny); if(iy >= ny) iy = ny - 1; if(iy < 0) iy = 0;
         int iz = (int)(sz * nz); if(iz >= nz) iz = nz - 1; if(iz < 0) iz = 0;
-        Grid[(size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz] += 1.0;
+        const size_t vox = (size_t)ix*(size_t)ny*(size_t)nz + (size_t)iy*(size_t)nz + (size_t)iz;
+        Grid[vox] += 1.0;
+        if(HalfPtr) HalfPtr[vox] += 1.0;
       }
     }
   }
   SystemComponents.DensityGridSamples++;
+}
+
+//Optional in-run convergence check (DensityGridTanimotoStop yes; default OFF -> never called
+//with effect). Splits the accumulated samples into two block-interleaved halves (half A above,
+//half B = total - half A) and computes the continuous Tanimoto T = <a,b>/(<a,a>+<b,b>-<a,b>)
+//between them, minimized over adsorbate components. When T >= DensityGridTanimotoThreshold for
+//2 consecutive checks, sets DensityGridConverged so the cycle loop ends production early.
+//NOTE: split halves share one trajectory, so this is an OPTIMISTIC (internal) convergence
+//estimate relative to two fully independent replicate runs.//
+static inline void Check_DensityGrid_TanimotoStop(Components& SystemComponents)
+{
+  if(!(SystemComponents.ComputeDensityGrid && SystemComponents.DensityGridTanimotoStop)) return;
+  if(SystemComponents.DensityGridConverged) return;
+  if(SystemComponents.DensityGrid.empty() || SystemComponents.DensityGridHalf.empty()) return;
+  double minT = 2.0; bool any = false;
+  for(int comp = SystemComponents.NComponents.y; comp < SystemComponents.NComponents.x; comp++)
+  {
+    const std::vector<double>& G = SystemComponents.DensityGrid[comp];
+    const std::vector<double>& Ah = SystemComponents.DensityGridHalf[comp];
+    if(G.size() == 0 || Ah.size() != G.size()) continue;
+    double ab = 0.0, aa = 0.0, bb = 0.0;
+    for(size_t v = 0; v < G.size(); v++)
+    {
+      const double a = Ah[v]; const double b = G[v] - Ah[v];
+      ab += a * b; aa += a * a; bb += b * b;
+    }
+    const double denom = aa + bb - ab;
+    if(denom <= 0.0) continue;                        //empty or degenerate half -> no verdict//
+    any = true; const double T = ab / denom;
+    if(T < minT) minT = T;
+  }
+  if(!any) { SystemComponents.DensityGridTanimotoStable = 0; return; }
+  const bool pass = (minT >= SystemComponents.DensityGridTanimotoThreshold);
+  SystemComponents.DensityGridTanimotoStable = pass ? SystemComponents.DensityGridTanimotoStable + 1 : 0;
+  fprintf(SystemComponents.OUTPUT, "Density-grid split-half Tanimoto = %.4f (threshold %.3f, consecutive pass %zu/2, %zu snapshots)\n",
+          minT, SystemComponents.DensityGridTanimotoThreshold,
+          SystemComponents.DensityGridTanimotoStable, SystemComponents.DensityGridSamples);
+  if(SystemComponents.DensityGridTanimotoStable >= 2)
+  {
+    SystemComponents.DensityGridConverged = true;
+    fprintf(SystemComponents.OUTPUT, "DENSITY GRID CONVERGED (split-half Tanimoto >= %.3f twice) -- ending production early.\n"
+            "NOTE: BLOCK AVERAGES printed at the end still divide by the full planned cycle count;\n"
+            "      with an early stop, read the average loading from the density-grid integral instead.\n",
+            SystemComponents.DensityGridTanimotoThreshold);
+  }
 }
 
 //Write the accumulated grid for every adsorbate component (number density, molecules/Angstrom^3).//

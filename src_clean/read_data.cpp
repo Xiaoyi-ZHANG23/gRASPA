@@ -1376,6 +1376,27 @@ void read_movies_stats_print(Components& SystemComponents, size_t sim)
           SystemComponents.DensityGridMolecularCenter = true;
       }
     }
+    if (str.find("DensityGridTanimotoStop", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "DensityGridTanimotoStop")
+      {
+        if(termsScannedLined.size() > 1 && caseInSensStringCompare(termsScannedLined[1], "yes"))
+          SystemComponents.DensityGridTanimotoStop = true;
+      }
+    }
+    if (str.find("DensityGridTanimotoThreshold", 0) != std::string::npos)
+    {
+      Split_Tab_Space(termsScannedLined, str);
+      if(termsScannedLined[0] == "DensityGridTanimotoThreshold")
+      {
+        double thr = 0.0;
+        if(termsScannedLined.size() > 1 && sscanf(termsScannedLined[1].c_str(), "%lf", &thr) == 1 && thr > 0.0 && thr < 1.0)
+          SystemComponents.DensityGridTanimotoThreshold = thr;
+        else
+          fprintf(SystemComponents.OUTPUT, "Warning: DensityGridTanimotoThreshold malformed (need a value in (0,1)), keeping default %.3f\n", SystemComponents.DensityGridTanimotoThreshold);
+      }
+    }
     //=== Precomputed framework energy grid keywords (RASPA2 MakeGrid/MakeASCIGrid parity) ===//
     //Keyword names follow RASPA2 (SpacingVDWGrid/SpacingCoulombGrid/GridTypes) so a RASPA2
     //MakeGrid input can be reused directly. GridTypes takes the pseudo-atom names on the same
@@ -1490,6 +1511,9 @@ void read_movies_stats_print(Components& SystemComponents, size_t sim)
     fprintf(SystemComponents.OUTPUT, "3D density grid for adsorbates: no\n");
   if(SystemComponents.ComputeDensityGrid && SystemComponents.DensityGridMolecularCenter)
     fprintf(SystemComponents.OUTPUT, "  density-grid binning: MOLECULAR CENTER (one point/molecule; CO2 -> C, monatomic -> the atom; integral = molecule count)\n");
+  if(SystemComponents.ComputeDensityGrid && SystemComponents.DensityGridTanimotoStop)
+    fprintf(SystemComponents.OUTPUT, "  density-grid TANIMOTO STOP: on (split-half threshold %.3f, checked every %zu cycles; production ends early once converged)\n",
+            SystemComponents.DensityGridTanimotoThreshold, SystemComponents.DensityGridWriteEvery);
   //Energy-grid banner: printed ONLY when the feature is on, so existing runs stay byte-identical.//
   //NOTE: keep the braces — a brace-less if here once swallowed the banner (density-grid dangling-if bug).//
   if(SystemComponents.ComputeEnergyGrid)
