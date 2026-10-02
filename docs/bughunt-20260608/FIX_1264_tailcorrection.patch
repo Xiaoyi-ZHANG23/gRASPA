@@ -1,0 +1,42 @@
+diff --git a/src_clean/read_data.cpp b/src_clean/read_data.cpp
+index e54786f..9c42360 100644
+--- a/src_clean/read_data.cpp
++++ b/src_clean/read_data.cpp
+@@ -853,7 +853,13 @@ static inline double GetTailCorrectionValue_Coeff(double C12, double C6, double
+   double rc7 = rc3 * rc3 * rc;
+   double rc9 = rc7 * rc * rc;
+   double pi = 3.14159265358979323846;
+-  double val = 4.0 * pi * (C12 / (9.0 * rc9) - C6 / (3.0 * rc3) + C10 / (7.0 * rc7) + C4 / rc);
++  // Per-pair tail-correction coefficient = 2*pi * integral_{rc}^inf U(r) r^2 dr, where
++  // U(r) = C12/r^12 - C6/r^6 + C10/r^10 + C4/r^4 (matches the 12-6-4 VDW kernel).
++  // The 2*pi prefactor makes this reduce EXACTLY to the standard LJ result in
++  // GetTailCorrectionValue() when C4=C10=0 (there C12=4*eps*sig^12, C6=4*eps*sig^6
++  // give 2*pi*(C12/(9 rc^9) - C6/(3 rc^3)) = 8*pi*eps*(sig^12/(9 rc^9) - sig^6/(3 rc^3))).
++  // NOTE: a previous 4.0*pi here double-counted the tail energy (bug: TailE was 2x too large).
++  double val = 2.0 * pi * (C12 / (9.0 * rc9) - C6 / (3.0 * rc3) + C10 / (7.0 * rc7) + C4 / rc);
+   return val;
+ }
+ 
+@@ -983,14 +989,21 @@ void OverWrite_Mixing_Rule(Input_Container& Input)
+ 
+   // Second pass: process sections
+   counter = 0;
++  size_t Ndefint_done = 0; // number of GENERIC2_HC data lines consumed so far
+   while (std::getline(OverWritefile, str))
+   {
+     // --- Process "defined interactions" section (GENERIC2_HC, only when Use1264=true) ---
+-    if(Ndefint > 0 && counter >= (defint_startline+3) && counter < (3 + defint_startline + Ndefint))
++    // Robust to comment/blank lines between the count line and the data: we scan every
++    // line after the count line (defint_startline+1) and consume the next Ndefint lines
++    // that are actual GENERIC2_HC entries. (The previous fixed window [defint_startline+3,
++    // +3+Ndefint) silently skipped the data whenever extra comment lines preceded it, so
++    // the interaction was never applied -- see the shipped TIP4PEW example.)
++    if(Ndefint > 0 && Ndefint_done < Ndefint && counter > (defint_startline + 1))
+     {
+       Split_Tab_Space(termsScannedLined, str);
+       if(termsScannedLined.size() >= 9 && termsScannedLined[2] == "GENERIC2_HC")
+       {
++        Ndefint_done++;
+         // GENERIC2_HC: U(r) = p0*exp(-p1*r) - p2/r^4 - p3/r^6 - p4/r^8 - p5/r^12
+         // Ref: haoyuanchen/RASPA-tools LJ1264Potential (Du et al., JCTC 2020)
+         // NOTE: last term is r^-12 (NOT r^-10 like original GENERIC)

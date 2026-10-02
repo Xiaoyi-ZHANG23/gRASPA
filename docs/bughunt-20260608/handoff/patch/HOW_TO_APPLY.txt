@@ -1,0 +1,2 @@
+Patch base commit: snurr-group/gRASPA HEAD 3fc256d (== origin/main, 2026-05-13)
+Apply with:  cd <gRASPA clone>; git apply patch/FIX_graspa_1264_and_override_bugs.patch
