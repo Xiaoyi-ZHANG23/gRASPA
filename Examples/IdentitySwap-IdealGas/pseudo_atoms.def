@@ -1,0 +1,5 @@
+#number of pseudo atoms
+2
+#type     print     as     chem     oxi     mass     charge     pol
+A     yes     Ar     Ar     0     39.948     0     0
+B     yes     Kr     Kr     0     83.798     0     0

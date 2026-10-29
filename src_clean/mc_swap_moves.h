@@ -208,36 +208,57 @@ static inline MoveEnergy IdentitySwapMove(Variables& Vars, size_t systemId)
   //Selected Molecule is the molecule that is being identity-swapped//
 
    //Zhao's note: If CO2/CH4 mixture, since CH4 doesn't have rotation moves, identity swap will be performed more times for CH4 than for CO2. Add this switch of Old/NewComponent to avoid this issue.
-  size_t NEWComponent = 0;
-  size_t OLDComponent = 0;
-  size_t NOld = 0;
-  //It seems that identity swap can swap back to its own species, so need to relax the current criterion//
-  //while(NEWComponent == OLDComponent || NEWComponent == 0 || NEWComponent >= SystemComponents.NComponents.x)
-  //Must select adsorbate species, cannot exceed number of species in sim, oldcomponent number of mol > 0//
-  if((SystemComponents.TotalNumberOfMolecules - SystemComponents.NumberOfFrameworks) == 0) //No adsorbates
+  //Adsorbate species occupy component indices [NComponents.y, NComponents.x); frameworks come first//
+  size_t NAdsorbateComponents = SystemComponents.NComponents.x - SystemComponents.NComponents.y;
+  if(NAdsorbateComponents < 2) //A single adsorbate species has nothing to change identity with//
   {
     MoveEnergy Empty;
     return Empty;
   }
-  while(OLDComponent == 0 || OLDComponent >= SystemComponents.NComponents.x ||
-        NEWComponent == 0 || NEWComponent >= SystemComponents.NComponents.x || 
-        NOld == 0)
+  //Draw the ordered pair (OLD, NEW), with NEW != OLD, ONCE and BEFORE looking at any molecule count.//
+  //Every ordered pair then has probability 1/(n(n-1)) from every state, so the pair proposal is symmetric//
+  //and cancels from the acceptance rule below (which carries the molecule-selection factor N_OLD/(N_NEW+1)//
+  //but no pair-selection factor).//
+  //The previous rule redrew the pair whenever OLD had no molecules, giving the pair probability 1/(n m)//
+  //with m = number of occupied adsorbate species. A swap that fills an empty species was then proposed//
+  //twice as often as its reverse (two species) while the acceptance rule assumed equal proposal//
+  //probabilities, so detailed balance was broken and a rarely occupied species was over-populated//
+  //(about +30% for <N> = 0.3 in an ideal-gas test, see Examples/IdentitySwap-IdealGas).//
+  //Self swaps (NEW == OLD) are excluded as well: they were reinsertions accepted with a spurious//
+  //factor N/(N+1) from the two GetPrefactor calls.//
+  //Get_Uniform_Random() is rand()/RAND_MAX and can return exactly 1.0, so a draw that lands on the upper//
+  //bound is repeated. That redraw depends only on the random number, never on the state of the system.//
+  size_t OLDComponent = 0;
+  size_t NEWComponent = 0;
+  do
   {
-    OLDComponent = (size_t) (Get_Uniform_Random()*(SystemComponents.NComponents.x - SystemComponents.NComponents.y)) + SystemComponents.NComponents.y;
-    NEWComponent = (size_t) (Get_Uniform_Random()*(SystemComponents.NComponents.x - SystemComponents.NComponents.y)) + SystemComponents.NComponents.y;
-    NOld = SystemComponents.NumberOfMolecule_for_Component[OLDComponent];
-    /*
-    if(Get_Uniform_Random() < 0.5)
-    {
-      size_t tempComponent = OLDComponent;
-      OLDComponent = NEWComponent;
-      NEWComponent = tempComponent;
-    } 
-    */
+    OLDComponent = (size_t) (Get_Uniform_Random() * NAdsorbateComponents) + SystemComponents.NComponents.y;
+  } while(OLDComponent >= SystemComponents.NComponents.x);
+  do
+  {
+    NEWComponent = (size_t) (Get_Uniform_Random() * (NAdsorbateComponents - 1)) + SystemComponents.NComponents.y;
+  } while(NEWComponent >= SystemComponents.NComponents.x - 1);
+  if(NEWComponent >= OLDComponent) NEWComponent ++; //Uniform over the other adsorbate species//
+
+  //Count the attempt before checking the molecule count of OLD, so that an attempt from an empty species//
+  //shows up as a rejected attempt in the statistics (as a failed CBMC construction does)//
+  SystemComponents.Moves[OLDComponent].IdentitySwapRemoveTotal ++;
+  SystemComponents.Moves[NEWComponent].IdentitySwapAddTotal ++;
+  SystemComponents.Moves[OLDComponent].IdentitySwap_Total_TO[NEWComponent] ++;
+
+  size_t NOld = SystemComponents.NumberOfMolecule_for_Component[OLDComponent];
+  if(NOld == 0) //Nothing to change in OLD: a rejected attempt. Do NOT redraw the pair//
+  {
+    MoveEnergy Empty;
+    return Empty;
   }
 
   size_t NEWMolInComponent = SystemComponents.NumberOfMolecule_for_Component[NEWComponent];
-  size_t OLDMolInComponent = (size_t) (Get_Uniform_Random() * SystemComponents.NumberOfMolecule_for_Component[OLDComponent]);
+  size_t OLDMolInComponent = 0;
+  do
+  {
+    OLDMolInComponent = (size_t) (Get_Uniform_Random() * NOld);
+  } while(OLDMolInComponent >= NOld);
 
   double NNEWMol = static_cast<double>(SystemComponents.NumberOfMolecule_for_Component[NEWComponent]);
   double NOLDMol = static_cast<double>(SystemComponents.NumberOfMolecule_for_Component[OLDComponent]);
@@ -249,10 +270,6 @@ static inline MoveEnergy IdentitySwapMove(Variables& Vars, size_t systemId)
 
   SystemComponents.TempVal.molecule = NEWMolInComponent;
   SystemComponents.TempVal.component= NEWComponent;
-
-  SystemComponents.Moves[OLDComponent].IdentitySwapRemoveTotal ++;
-  SystemComponents.Moves[NEWComponent].IdentitySwapAddTotal ++;
-  SystemComponents.Moves[OLDComponent].IdentitySwap_Total_TO[NEWComponent] ++;
 
   MoveEnergy energy; MoveEnergy old_energy;
 

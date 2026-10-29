@@ -656,4 +656,10 @@ inline void prepare_MixtureStats(Components& SystemComponents)
     fprintf(SystemComponents.OUTPUT,"Component [%zu] (%s), Mol Fraction: %.5f\n", j, SystemComponents.MoleculeName[j].c_str(), SystemComponents.MolFraction[j]);
   }
   fprintf(SystemComponents.OUTPUT, "=================================================\n");
+  //Identity swap needs two adsorbate species; with one, every attempt is a no-op (see IdentitySwapMove)//
+  //Probabilities are accumulated at this point, so the identity-swap weight is the difference to the previous rung//
+  if(SystemComponents.NComponents.x - SystemComponents.NComponents.y < 2)
+    for(size_t j = SystemComponents.NComponents.y; j < SystemComponents.NComponents.x; j++)
+      if(SystemComponents.Moves[j].IdentitySwapProb - SystemComponents.Moves[j].ReinsertionProb > 1e-10)
+        fprintf(SystemComponents.OUTPUT, "WARNING: Component [%zu] (%s) has IdentityChangeProbability > 0 but there is only one adsorbate species; identity-swap attempts will do nothing. Set it to 0 and use ReinsertionProbability instead.\n", j, SystemComponents.MoleculeName[j].c_str());
 }
